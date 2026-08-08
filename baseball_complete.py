@@ -323,14 +323,39 @@ class BaseballRenderer:
     # takes over the play-result row instead while a bid is active.
     NOHITTER_MIN_INNING = 5
 
+    def _bases_description(self, bases):
+        """Text description of occupied bases, e.g. "Man on 2nd" or "Bases
+        loaded" - there's no room left on this layout for a bases diamond
+        (see render_scoreboard's linescore), so this is the replacement,
+        prefixed onto the play-result row rather than needing its own space."""
+        if not bases:
+            return ""
+        on = []
+        if bases.get('first'):
+            on.append("1st")
+        if bases.get('second'):
+            on.append("2nd")
+        if bases.get('third'):
+            on.append("3rd")
+        if len(on) == 3:
+            return "Bases loaded"
+        if len(on) == 2:
+            return f"Men on {on[0]} and {on[1]}"
+        if len(on) == 1:
+            return f"Man on {on[0]}"
+        return ""
+
     def render_play_result(self, result_text, play_event=None, last_pitch=None,
-                            no_hitter=False, perfect_game=False, inning_number=0):
+                            no_hitter=False, perfect_game=False, inning_number=0,
+                            bases=None):
         """Render the last completed play if there is one; otherwise fall back
         to the last pitch thrown (speed + type), since that updates every
         pitch even mid-at-bat while result_text stays empty until the at-bat
         concludes. Strikeouts get the dedicated strikeout color. A no-hitter
         or perfect-game bid (inning 5+) takes over this row entirely, since
-        it's more exciting/important than the play-by-play."""
+        it's more exciting/important than the play-by-play. Occupied bases
+        get prefixed onto whichever of the above is showing, e.g. "Bases
+        loaded - Strikeout swinging"."""
         if perfect_game and inning_number >= self.NOHITTER_MIN_INNING:
             text = "PERFECT GAME IN PROGRESS"
             color = self.get_color("perfect_game_text", (255, 110, 110))
@@ -349,6 +374,10 @@ class BaseballRenderer:
         else:
             text = ""
             color = self.get_color("atbat.play_result", (255, 255, 255))
+
+        runners = self._bases_description(bases)
+        if runners:
+            text = f"{runners} - {text}" if text else runners
 
         x = LAYOUT["play_result"]["x"]
         max_width = 128 - x - 2
@@ -454,7 +483,8 @@ class BaseballRenderer:
             self.render_pitcher(game.get('pitcher', ''), game.get('pitch_count', 0))
             self.render_batter(game.get('batter', ''))
             self.render_play_result(game.get('play_result', ''), game.get('play_event', ''), game.get('last_pitch'),
-                                     game.get('no_hitter', False), game.get('perfect_game', False), game['inning']['number'])
+                                     game.get('no_hitter', False), game.get('perfect_game', False), game['inning']['number'],
+                                     game.get('bases'))
             self.render_count(game['count']['strikes'], game['count']['outs'])
 
         elif game['status'] == 'final':
