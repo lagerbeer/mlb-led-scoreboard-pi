@@ -184,6 +184,7 @@ class MLBDataFetcher:
                 pitch_count = 0
                 no_hitter = perfect_game = False
                 winning_pitcher = losing_pitcher = save_pitcher = None
+                linescore_innings = []
                 
                 # Get detailed info for live games
                 if game_status == 'live':
@@ -194,6 +195,7 @@ class MLBDataFetcher:
                         # balls/strikes/outs are directly on linescore (no "count" sub-object).
                         live_data = game_data.get('liveData', {})
                         linescore = live_data.get('linescore', {})
+                        linescore_innings = linescore.get('innings', [])
 
                         # schedule() (where home_score/home_hits/home_errors were set above)
                         # only ever returns runs - hits and errors simply aren't part of that
@@ -300,6 +302,7 @@ class MLBDataFetcher:
                         winning_pitcher = decisions.get('winner', {}).get('fullName')
                         losing_pitcher = decisions.get('loser', {}).get('fullName')
                         save_pitcher = decisions.get('save', {}).get('fullName')
+                        linescore_innings = game_data.get('liveData', {}).get('linescore', {}).get('innings', [])
                     except Exception as e:
                         print(f"⚠️ Error getting final game decisions: {e}")
 
@@ -348,6 +351,7 @@ class MLBDataFetcher:
                     'winning_pitcher': winning_pitcher,
                     'losing_pitcher': losing_pitcher,
                     'save_pitcher': save_pitcher,
+                    'linescore_innings': linescore_innings,
                     'start_time': game.get('game_datetime', ''),
                     'start_time_local': format_local_time(game.get('game_datetime', ''))
                 }

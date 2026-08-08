@@ -19,43 +19,30 @@ with open('/home/pi/mlb_scoreboard_pro/colors_elements.json', 'r') as f:
 with open('/home/pi/mlb_scoreboard_pro/colors_teams.json', 'r') as f:
     TEAM_COLORS = json.load(f)
 
-# Layout coordinates - R/H/E moved left (was 85/100/115) to free up the right
-# side for the bases diamond, which moved up near the top (was y=33/42) since
-# that freed space is now clear all the way from the header row down through
-# the team rows, instead of competing with the pitcher/batter area below.
+# Layout coordinates. The header/team rows show a full inning-by-inning
+# linescore (see render_scoreboard) instead of a bases diamond - there isn't
+# room on a 128px-wide panel for both a readable 9-inning grid and a bases
+# diamond at a legible size, and the linescore is the more broadcast-standard
+# piece of information to prioritize.
 LAYOUT = {
-    "headers": {
-        "rhe": {"x": 40, "y": 8, "text": "R H E"},
-        "h": {"x": 53, "y": 8},
-        "e": {"x": 66, "y": 8}
-    },
-    # Sits in the header row's dead space between "E" (ends ~x=72) and the bases
-    # diamond (starts at x=94) - the one spot on this layout not already claimed
-    # by another element.
-    "nohitter": {"x": 76, "y": 8},
-    # The FINAL badge reuses that same header-row gap (bases never render on
-    # the final screen, so there's no live-screen conflict to worry about).
-    # Freeing up "FINAL" from the middle of the screen leaves room for three
-    # rows of W/L/SV below the team rows instead of the one line it used to.
-    "final": {
-        "badge": {"x": 76, "y": 8},
-        "decisions": {"x": 4, "y_start": 44, "row_height": 9}
-    },
-    "teams": {
-        "away": {
-            "name": {"x": 6, "y": 20},
-            "runs": {"x": 40, "y": 20},
-            "hits": {"x": 53, "y": 20},
-            "errors": {"x": 66, "y": 20},
-            "background": {"y_start": 11, "y_end": 22}
-        },
-        "home": {
-            "name": {"x": 6, "y": 32},
-            "runs": {"x": 40, "y": 32},
-            "hits": {"x": 53, "y": 32},
-            "errors": {"x": 66, "y": 32},
-            "background": {"y_start": 22, "y_end": 34}
+    "linescore": {
+        "team_code_x": 4,
+        "innings_x_start": 22,
+        "innings_x_end": 96,
+        "rhe_x": {"r": 100, "h": 109, "e": 118},
+        "header_y": 8,
+        "away_y": 20,
+        "home_y": 32,
+        "background": {
+            "away": {"y_start": 11, "y_end": 22},
+            "home": {"y_start": 22, "y_end": 34}
         }
+    },
+    # FINAL used to get its own header-row badge, but that slot is now the
+    # linescore header - it's folded into the first decisions row instead
+    # (see render_final).
+    "final": {
+        "decisions": {"x": 4, "y_start": 44, "row_height": 9}
     },
     # B:/S:/O: now stack vertically in a narrow column on the left (x=2), one per
     # row, sharing the same 3 row heights as pitcher/batter/play_result (which
@@ -84,18 +71,12 @@ LAYOUT = {
     },
     "play_result": {
         "x": 40, "y": 60
-    },
-    "bases": {
-        "1B": {"x": 112, "y": 18, "size": 10},
-        "2B": {"x": 103, "y": 9, "size": 10},
-        "3B": {"x": 94, "y": 18, "size": 10}
     }
 }
 
-# Team-colored background bars stop a couple pixels short of the bases diamond
-# (leftmost point is 3B's x) instead of running the full panel width, so the
-# bar doesn't get drawn underneath/behind the bases.
-TEAM_BACKGROUND_X_END = min(base["x"] for base in LAYOUT["bases"].values()) - 2
+# Team-colored background bars now run the full panel width - there's no
+# bases diamond to leave a gap for anymore.
+TEAM_BACKGROUND_X_END = 128
 
 class BaseballRenderer:
     def __init__(self):
@@ -218,112 +199,78 @@ class BaseballRenderer:
             if cx >= clip_right:
                 break
 
-    # ============= HEADERS =============
-    def render_headers(self):
-        """Render R H E header with proper spacing"""
-        rhe_color = self.get_color("inning.number", (255, 235, 59))
-        rgbmatrix.graphics.DrawText(self.canvas, self.font_small,
-                                   LAYOUT["headers"]["rhe"]["x"],
-                                   LAYOUT["headers"]["rhe"]["y"],
-                                   rhe_color, "R")
-        rgbmatrix.graphics.DrawText(self.canvas, self.font_small,
-                                   LAYOUT["headers"]["h"]["x"],
-                                   LAYOUT["headers"]["h"]["y"],
-                                   rhe_color, "H")
-        rgbmatrix.graphics.DrawText(self.canvas, self.font_small,
-                                   LAYOUT["headers"]["e"]["x"],
-                                   LAYOUT["headers"]["e"]["y"],
-                                   rhe_color, "E")
+    # ============= SCOREBOARD (header + team rows + linescore) =============
+    # Replaces the old separate render_headers()/render_teams() - the header
+    # row and team rows now form one inning-by-inning linescore grid, so they
+    # need to agree on the same column positions and are easiest to keep in
+    # sync as a single method.
+    def _inning_columns(self, num_innings):
+        """x position for each inning column (0-indexed), sized to fit the
+        fixed budget between the team code and the R/H/E block. Compresses
+        below the standard ~8px/inning width if the game has gone past 9
+        innings, rather than running off the panel."""
+        x_start = LAYOUT["linescore"]["innings_x_start"]
+        x_end = LAYOUT["linescore"]["innings_x_end"]
+        num_cols = max(9, num_innings)
+        col_width = (x_end - x_start) / num_cols
+        return [x_start + i * col_width for i in range(num_cols)]
 
-    # ============= NO-HITTER / PERFECT GAME =============
-    # Mirrors mlb-led-scoreboard's nohitter renderer: a compact badge driven by
-    # the MLB API's own gameData.flags.noHitter/perfectGame booleans, gated to
-    # inning 5+ so a no-hit bid isn't flagged this early (common and unremarkable
-    # in the 1st-4th).
-    NOHITTER_MIN_INNING = 5
+    def render_scoreboard(self, game):
+        """Full linescore: inning number header row, R/H/E header labels, and
+        both teams' per-inning runs + R/H/E totals with team-colored row
+        backgrounds. Shown identically across live/pregame/final - pregame
+        just shows all-blank innings, same as a real park scoreboard before
+        first pitch."""
+        innings = game.get('linescore_innings') or []
+        current_inning = (game.get('inning') or {}).get('number') or 0
+        num_innings_needed = max(len(innings), current_inning)
+        inning_x = self._inning_columns(num_innings_needed)
+        rhe_x = LAYOUT["linescore"]["rhe_x"]
+        header_y = LAYOUT["linescore"]["header_y"]
+        away_y = LAYOUT["linescore"]["away_y"]
+        home_y = LAYOUT["linescore"]["home_y"]
 
-    def render_nohit_indicator(self, no_hitter, perfect_game, inning_number):
-        if inning_number < self.NOHITTER_MIN_INNING:
-            return
-        if perfect_game:
-            text, color = "P.G", self.get_color("perfect_game_text", (255, 110, 110))
-        elif no_hitter:
-            text, color = "N.H", self.get_color("nohit_text", (255, 110, 110))
-        else:
-            return
+        header_color = self.get_color("inning.number", (255, 235, 59))
+        for i, x in enumerate(inning_x):
+            rgbmatrix.graphics.DrawText(self.canvas, self.font_small, int(x), header_y, header_color, str(i + 1))
+        for label, x in rhe_x.items():
+            rgbmatrix.graphics.DrawText(self.canvas, self.font_small, x, header_y, header_color, label.upper())
 
-        rgbmatrix.graphics.DrawText(self.canvas, self.font_small,
-                                   LAYOUT["nohitter"]["x"],
-                                   LAYOUT["nohitter"]["y"],
-                                   color, text)
-
-    # ============= TEAMS =============
-    def render_teams(self, game):
-        """Render team names, runs, hits, errors with team-colored backgrounds"""
-        # Get team colors
         away_bg_color = self.get_team_color(game['away']['code'], "home")
         home_bg_color = self.get_team_color(game['home']['code'], "home")
-        
-        # Get contrasting text colors
         away_text_color = self.get_contrasting_text_color(away_bg_color)
         home_text_color = self.get_contrasting_text_color(home_bg_color)
-        
-        # Fill backgrounds
-        self.fill_background(LAYOUT["teams"]["away"]["background"]["y_start"],
-                            LAYOUT["teams"]["away"]["background"]["y_end"],
+
+        self.fill_background(LAYOUT["linescore"]["background"]["away"]["y_start"],
+                            LAYOUT["linescore"]["background"]["away"]["y_end"],
                             away_bg_color, TEAM_BACKGROUND_X_END)
-        self.fill_background(LAYOUT["teams"]["home"]["background"]["y_start"],
-                            LAYOUT["teams"]["home"]["background"]["y_end"],
+        self.fill_background(LAYOUT["linescore"]["background"]["home"]["y_start"],
+                            LAYOUT["linescore"]["background"]["home"]["y_end"],
                             home_bg_color, TEAM_BACKGROUND_X_END)
-        
-        # Away team name
-        rgbmatrix.graphics.DrawText(self.canvas, self.font_large,
-                                   LAYOUT["teams"]["away"]["name"]["x"],
-                                   LAYOUT["teams"]["away"]["name"]["y"],
+
+        rgbmatrix.graphics.DrawText(self.canvas, self.font_small,
+                                   LAYOUT["linescore"]["team_code_x"], away_y,
                                    away_text_color, game['away']['code'])
-        
-        # Home team name
-        rgbmatrix.graphics.DrawText(self.canvas, self.font_large,
-                                   LAYOUT["teams"]["home"]["name"]["x"],
-                                   LAYOUT["teams"]["home"]["name"]["y"],
+        rgbmatrix.graphics.DrawText(self.canvas, self.font_small,
+                                   LAYOUT["linescore"]["team_code_x"], home_y,
                                    home_text_color, game['home']['code'])
-        
-        # Runs, Hits, Errors
-        away_runs = str(game['away'].get('runs', 0))
-        away_hits = str(game['away'].get('hits', 0))
-        away_errors = str(game['away'].get('errors', 0))
-        
-        home_runs = str(game['home'].get('runs', 0))
-        home_hits = str(game['home'].get('hits', 0))
-        home_errors = str(game['home'].get('errors', 0))
-        
-        # Away stats
-        rgbmatrix.graphics.DrawText(self.canvas, self.font_large,
-                                   LAYOUT["teams"]["away"]["runs"]["x"],
-                                   LAYOUT["teams"]["away"]["runs"]["y"],
-                                   away_text_color, away_runs)
-        rgbmatrix.graphics.DrawText(self.canvas, self.font_large,
-                                   LAYOUT["teams"]["away"]["hits"]["x"],
-                                   LAYOUT["teams"]["away"]["hits"]["y"],
-                                   away_text_color, away_hits)
-        rgbmatrix.graphics.DrawText(self.canvas, self.font_large,
-                                   LAYOUT["teams"]["away"]["errors"]["x"],
-                                   LAYOUT["teams"]["away"]["errors"]["y"],
-                                   away_text_color, away_errors)
-        
-        # Home stats
-        rgbmatrix.graphics.DrawText(self.canvas, self.font_large,
-                                   LAYOUT["teams"]["home"]["runs"]["x"],
-                                   LAYOUT["teams"]["home"]["runs"]["y"],
-                                   home_text_color, home_runs)
-        rgbmatrix.graphics.DrawText(self.canvas, self.font_large,
-                                   LAYOUT["teams"]["home"]["hits"]["x"],
-                                   LAYOUT["teams"]["home"]["hits"]["y"],
-                                   home_text_color, home_hits)
-        rgbmatrix.graphics.DrawText(self.canvas, self.font_large,
-                                   LAYOUT["teams"]["home"]["errors"]["x"],
-                                   LAYOUT["teams"]["home"]["errors"]["y"],
-                                   home_text_color, home_errors)
+
+        innings_by_num = {inn.get('num'): inn for inn in innings}
+        for i, x in enumerate(inning_x):
+            inning_data = innings_by_num.get(i + 1)
+            away_runs = inning_data.get('away', {}).get('runs') if inning_data else None
+            home_runs = inning_data.get('home', {}).get('runs') if inning_data else None
+            rgbmatrix.graphics.DrawText(self.canvas, self.font_small, int(x), away_y,
+                                       away_text_color, str(away_runs) if away_runs is not None else "-")
+            rgbmatrix.graphics.DrawText(self.canvas, self.font_small, int(x), home_y,
+                                       home_text_color, str(home_runs) if home_runs is not None else "-")
+
+        rgbmatrix.graphics.DrawText(self.canvas, self.font_small, rhe_x["r"], away_y, away_text_color, str(game['away'].get('runs', 0)))
+        rgbmatrix.graphics.DrawText(self.canvas, self.font_small, rhe_x["h"], away_y, away_text_color, str(game['away'].get('hits', 0)))
+        rgbmatrix.graphics.DrawText(self.canvas, self.font_small, rhe_x["e"], away_y, away_text_color, str(game['away'].get('errors', 0)))
+        rgbmatrix.graphics.DrawText(self.canvas, self.font_small, rhe_x["r"], home_y, home_text_color, str(game['home'].get('runs', 0)))
+        rgbmatrix.graphics.DrawText(self.canvas, self.font_small, rhe_x["h"], home_y, home_text_color, str(game['home'].get('hits', 0)))
+        rgbmatrix.graphics.DrawText(self.canvas, self.font_small, rhe_x["e"], home_y, home_text_color, str(game['home'].get('errors', 0)))
 
     # ============= PITCHER =============
     def render_pitcher(self, pitcher_name, pitch_count=0):
@@ -368,12 +315,29 @@ class BaseballRenderer:
         rgbmatrix.graphics.DrawText(self.canvas, self.font_small, inning_x, y, inning_color, inning_display)
 
     # ============= PLAY RESULT =============
-    def render_play_result(self, result_text, play_event=None, last_pitch=None):
+    # Mirrors mlb-led-scoreboard's nohitter renderer: driven by the MLB API's
+    # own gameData.flags.noHitter/perfectGame booleans, gated to inning 5+ so
+    # a no-hit bid isn't flagged this early (common and unremarkable in the
+    # 1st-4th). Used by render_play_result below - there's no separate header
+    # badge slot anymore now that the header row is the linescore, so this
+    # takes over the play-result row instead while a bid is active.
+    NOHITTER_MIN_INNING = 5
+
+    def render_play_result(self, result_text, play_event=None, last_pitch=None,
+                            no_hitter=False, perfect_game=False, inning_number=0):
         """Render the last completed play if there is one; otherwise fall back
         to the last pitch thrown (speed + type), since that updates every
         pitch even mid-at-bat while result_text stays empty until the at-bat
-        concludes. Strikeouts get the dedicated strikeout color."""
-        if result_text:
+        concludes. Strikeouts get the dedicated strikeout color. A no-hitter
+        or perfect-game bid (inning 5+) takes over this row entirely, since
+        it's more exciting/important than the play-by-play."""
+        if perfect_game and inning_number >= self.NOHITTER_MIN_INNING:
+            text = "PERFECT GAME IN PROGRESS"
+            color = self.get_color("perfect_game_text", (255, 110, 110))
+        elif no_hitter and inning_number >= self.NOHITTER_MIN_INNING:
+            text = "NO-HITTER IN PROGRESS"
+            color = self.get_color("nohit_text", (255, 110, 110))
+        elif result_text:
             text = result_text
             if play_event == "Strikeout":
                 color = self.get_color("atbat.strikeout", (255, 0, 0))
@@ -425,67 +389,23 @@ class BaseballRenderer:
                                    LAYOUT["count"]["outs"]["y"],
                                    outs_color, f"O: {outs}")
 
-    # ============= BASES =============
-    def render_base_outline(self, base, color):
-        x, y = base["x"], base["y"]
-        size = base["size"]
-        half = size // 2
-        
-        rgbmatrix.graphics.DrawLine(self.canvas, x + half, y, x, y + half, color)
-        rgbmatrix.graphics.DrawLine(self.canvas, x + half, y, x + size, y + half, color)
-        rgbmatrix.graphics.DrawLine(self.canvas, x + half, y + size, x, y + half, color)
-        rgbmatrix.graphics.DrawLine(self.canvas, x + half, y + size, x + size, y + half, color)
-
-    def render_baserunner(self, base, color):
-        x, y = base["x"], base["y"]
-        size = base["size"]
-        half = size // 2
-        
-        for offset in range(1, half + 1):
-            rgbmatrix.graphics.DrawLine(self.canvas, 
-                                       x + half - offset, y + size - offset,
-                                       x + half + offset, y + size - offset, color)
-            rgbmatrix.graphics.DrawLine(self.canvas,
-                                       x + half - offset, y + offset,
-                                       x + half + offset, y + offset, color)
-
-    def render_bases(self, bases):
-        base_color = self.get_color("bases.1B", (255, 235, 59))
-        
-        base_order = ["1B", "2B", "3B"]
-        base_keys = ["first", "second", "third"]
-        
-        for i, (base_name, base_key) in enumerate(zip(base_order, base_keys)):
-            base = LAYOUT["bases"][base_name]
-            occupied = bases.get(base_key, False)
-            
-            self.render_base_outline(base, base_color)
-            if occupied:
-                self.render_baserunner(base, base_color)
-
     # ============= FINAL GAME =============
     def render_final(self, game):
-        """Render final game screen: team score (via render_teams), a FINAL
-        badge in the header row's empty gap (the same spot the no-hitter
-        badge uses on the live screen - this screen never draws bases, so
-        there's no conflict), and winning/losing/save pitcher below."""
-        self.render_headers()
-        self.render_teams(game)
-
-        final_color = self.get_color("final.inning", (255, 235, 59))
-        rgbmatrix.graphics.DrawText(self.canvas, self.font_small,
-                                   LAYOUT["final"]["badge"]["x"],
-                                   LAYOUT["final"]["badge"]["y"],
-                                   final_color, "FINAL")
+        """Render final game screen: full linescore (via render_scoreboard),
+        plus winning/losing/save pitcher below. "FINAL" no longer gets its
+        own header-row badge (that slot is the linescore header now) - it's
+        folded into the first decisions row instead."""
+        self.render_scoreboard(game)
 
         decision_color = self.get_color("final.scrolling_text", (255, 235, 59))
 
         def last_name(full_name):
             return full_name.split()[-1] if full_name else ""
 
-        rows = []
+        first_row = "FINAL"
         if game.get("winning_pitcher"):
-            rows.append(f"W: {last_name(game['winning_pitcher'])}")
+            first_row += f"  W: {last_name(game['winning_pitcher'])}"
+        rows = [first_row]
         if game.get("losing_pitcher"):
             rows.append(f"L: {last_name(game['losing_pitcher'])}")
         if game.get("save_pitcher"):
@@ -500,11 +420,12 @@ class BaseballRenderer:
 
     # ============= PREGAME =============
     def render_pregame(self, game):
-        """Render pregame screen: team matchup, plus a centered first-pitch
-        time below it (start_time_local is already converted to the system's
-        local timezone by mlb_integration.py - the API only gives UTC)."""
-        self.render_headers()
-        self.render_teams(game)
+        """Render pregame screen: full linescore (blank innings, since the
+        game hasn't started - via render_scoreboard), plus a centered
+        first-pitch time below it (start_time_local is already converted to
+        the system's local timezone by mlb_integration.py - the API only
+        gives UTC)."""
+        self.render_scoreboard(game)
 
         time_str = game.get('start_time_local') or 'TBD'
 
@@ -528,18 +449,14 @@ class BaseballRenderer:
         self.canvas.Fill(0, 0, 0)
         
         if game['status'] == 'live':
-            self.render_headers()
-            self.render_nohit_indicator(game.get('no_hitter', False),
-                                         game.get('perfect_game', False),
-                                         game['inning']['number'])
-            self.render_teams(game)
+            self.render_scoreboard(game)
             self.render_balls_and_inning(game['count']['balls'], game['inning']['state'], game['inning']['number'])
             self.render_pitcher(game.get('pitcher', ''), game.get('pitch_count', 0))
             self.render_batter(game.get('batter', ''))
-            self.render_play_result(game.get('play_result', ''), game.get('play_event', ''), game.get('last_pitch'))
+            self.render_play_result(game.get('play_result', ''), game.get('play_event', ''), game.get('last_pitch'),
+                                     game.get('no_hitter', False), game.get('perfect_game', False), game['inning']['number'])
             self.render_count(game['count']['strikes'], game['count']['outs'])
-            self.render_bases(game.get('bases', {}))
-        
+
         elif game['status'] == 'final':
             self.render_final(game)
         else:
