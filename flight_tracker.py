@@ -86,6 +86,10 @@ class FlightFetcher:
                     'heading': int(f.heading) if isinstance(f.heading, (int, float)) else 0,
                     'origin': (f.origin_airport_iata or '').strip(),
                     'destination': (f.destination_airport_iata or '').strip(),
+                    # ICAO aircraft type code (e.g. "A321", "PC12") - available
+                    # directly on the basic flight list, no extra per-flight
+                    # detail call (and its extra rate-limit risk) needed.
+                    'aircraft_code': (f.aircraft_code or '').strip(),
                     'distance_km': round(_distance_km(lat, lon, f.latitude, f.longitude), 1)
                 })
             except Exception:
