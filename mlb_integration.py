@@ -180,7 +180,10 @@ class MLBDataFetcher:
                 batter_name = pitcher_name = ''
                 last_pitch = None
                 play_result = ''
+                play_event = ''
+                pitch_count = 0
                 no_hitter = perfect_game = False
+                winning_pitcher = losing_pitcher = save_pitcher = None
                 
                 # Get detailed info for live games
                 if game_status == 'live':
@@ -231,6 +234,20 @@ class MLBDataFetcher:
                         batter_name = batter.get('fullName', '')
                         pitcher_name = pitcher.get('fullName', '')
 
+                        # Current pitcher's pitch count this game - looked up from
+                        # the boxscore by matching the defensive pitcher's ID.
+                        # Checking both sides rather than figuring out which team
+                        # is on defense avoids needing another lookup just for that.
+                        pitcher_id = pitcher.get('id')
+                        if pitcher_id:
+                            boxscore = live_data.get('boxscore', {})
+                            player_key = f'ID{pitcher_id}'
+                            for side in ('home', 'away'):
+                                side_players = boxscore.get('teams', {}).get(side, {}).get('players', {})
+                                if player_key in side_players:
+                                    pitch_count = side_players[player_key].get('stats', {}).get('pitching', {}).get('numberOfPitches', 0)
+                                    break
+
                         # Get last pitch info
                         plays = live_data.get('plays', {}).get('allPlays', [])
                         if plays:
@@ -261,15 +278,31 @@ class MLBDataFetcher:
                                 # Get play result
                                 result = last_play.get('result', {})
                                 play_result = result.get('description', '')
+                                play_event = result.get('event', '')
                         else:
                             # Try current play
                             current_play = offense.get('currentPlay', {})
                             if current_play:
                                 result = current_play.get('result', {})
                                 play_result = result.get('description', '')
+                                play_event = result.get('event', '')
                     except Exception as e:
                         print(f"⚠️ Error getting live game details: {e}")
-                
+
+                elif game_status == 'final':
+                    try:
+                        # liveData.decisions (a sibling of boxscore, not nested
+                        # inside it) holds the winning/losing/save pitcher once
+                        # the game's over - each just an id + fullName, no
+                        # win-loss record attached.
+                        game_data = statsapi.get('game', {'gamePk': game['game_id']})
+                        decisions = game_data.get('liveData', {}).get('decisions', {})
+                        winning_pitcher = decisions.get('winner', {}).get('fullName')
+                        losing_pitcher = decisions.get('loser', {}).get('fullName')
+                        save_pitcher = decisions.get('save', {}).get('fullName')
+                    except Exception as e:
+                        print(f"⚠️ Error getting final game decisions: {e}")
+
                 # Full names are passed through as-is - the renderer scrolls
                 # them on screen if they're too wide to fit, instead of us
                 # cutting them down to "LastName, F" / 10 characters here.
@@ -306,10 +339,15 @@ class MLBDataFetcher:
                     'bases': bases,
                     'pitcher': pitcher_name,
                     'batter': batter_name,
+                    'pitch_count': pitch_count,
                     'last_pitch': last_pitch,
                     'play_result': play_result,
+                    'play_event': play_event,
                     'no_hitter': no_hitter,
                     'perfect_game': perfect_game,
+                    'winning_pitcher': winning_pitcher,
+                    'losing_pitcher': losing_pitcher,
+                    'save_pitcher': save_pitcher,
                     'start_time': game.get('game_datetime', ''),
                     'start_time_local': format_local_time(game.get('game_datetime', ''))
                 }

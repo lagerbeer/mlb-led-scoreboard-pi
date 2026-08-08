@@ -33,6 +33,14 @@ LAYOUT = {
     # diamond (starts at x=94) - the one spot on this layout not already claimed
     # by another element.
     "nohitter": {"x": 76, "y": 8},
+    # The FINAL badge reuses that same header-row gap (bases never render on
+    # the final screen, so there's no live-screen conflict to worry about).
+    # Freeing up "FINAL" from the middle of the screen leaves room for three
+    # rows of W/L/SV below the team rows instead of the one line it used to.
+    "final": {
+        "badge": {"x": 76, "y": 8},
+        "decisions": {"x": 4, "y_start": 44, "row_height": 9}
+    },
     "teams": {
         "away": {
             "name": {"x": 6, "y": 20},
@@ -318,9 +326,10 @@ class BaseballRenderer:
                                    home_text_color, home_errors)
 
     # ============= PITCHER =============
-    def render_pitcher(self, pitcher_name):
-        """Render pitcher name close to P: label - scrolls if too wide to fit
-        before the right edge of the panel."""
+    def render_pitcher(self, pitcher_name, pitch_count=0):
+        """Render pitcher name (with this game's pitch count, broadcast-style)
+        close to P: label - scrolls if too wide to fit before the right edge
+        of the panel."""
         pitcher_color = self.get_color("atbat.pitcher", (255, 235, 59))
 
         rgbmatrix.graphics.DrawText(self.canvas, self.font_small,
@@ -328,11 +337,15 @@ class BaseballRenderer:
                                    LAYOUT["pitcher"]["label"]["y"],
                                    pitcher_color, "P:")
 
+        text = pitcher_name or ""
+        if text and pitch_count:
+            text = f"{text} ({pitch_count}p)"
+
         name_x = LAYOUT["pitcher"]["name"]["x"]
         max_width = 128 - name_x - 2
         self.draw_scrolling_text("pitcher", self.font_small, name_x,
                                   LAYOUT["pitcher"]["name"]["y"], max_width,
-                                  pitcher_color, pitcher_name or "")
+                                  pitcher_color, text)
 
     # ============= BALLS + INNING =============
     def render_balls_and_inning(self, balls, inning_state, inning_number):
@@ -355,15 +368,29 @@ class BaseballRenderer:
         rgbmatrix.graphics.DrawText(self.canvas, self.font_small, inning_x, y, inning_color, inning_display)
 
     # ============= PLAY RESULT =============
-    def render_play_result(self, result_text):
-        """Render the last play - scrolls if too wide to fit before the right
-        edge of the panel, same as the pitcher/batter names."""
-        result_color = self.get_color("atbat.play_result", (255, 255, 255))
+    def render_play_result(self, result_text, play_event=None, last_pitch=None):
+        """Render the last completed play if there is one; otherwise fall back
+        to the last pitch thrown (speed + type), since that updates every
+        pitch even mid-at-bat while result_text stays empty until the at-bat
+        concludes. Strikeouts get the dedicated strikeout color."""
+        if result_text:
+            text = result_text
+            if play_event == "Strikeout":
+                color = self.get_color("atbat.strikeout", (255, 0, 0))
+            else:
+                color = self.get_color("atbat.play_result", (255, 255, 255))
+        elif last_pitch:
+            text = f"Last pitch: {last_pitch['speed']:.0f}mph {last_pitch['type']}"
+            color = self.get_color("atbat.pitch", (255, 255, 255))
+        else:
+            text = ""
+            color = self.get_color("atbat.play_result", (255, 255, 255))
+
         x = LAYOUT["play_result"]["x"]
         max_width = 128 - x - 2
         self.draw_scrolling_text("play_result", self.font_small, x,
                                   LAYOUT["play_result"]["y"], max_width,
-                                  result_color, result_text or "")
+                                  color, text)
 
     # ============= BATTER =============
     def render_batter(self, batter_name):
@@ -438,13 +465,38 @@ class BaseballRenderer:
 
     # ============= FINAL GAME =============
     def render_final(self, game):
-        """Render final game screen"""
+        """Render final game screen: team score (via render_teams), a FINAL
+        badge in the header row's empty gap (the same spot the no-hitter
+        badge uses on the live screen - this screen never draws bases, so
+        there's no conflict), and winning/losing/save pitcher below."""
         self.render_headers()
         self.render_teams(game)
-        
+
         final_color = self.get_color("final.inning", (255, 235, 59))
         rgbmatrix.graphics.DrawText(self.canvas, self.font_small,
-                                   60, 52, final_color, "FINAL")
+                                   LAYOUT["final"]["badge"]["x"],
+                                   LAYOUT["final"]["badge"]["y"],
+                                   final_color, "FINAL")
+
+        decision_color = self.get_color("final.scrolling_text", (255, 235, 59))
+
+        def last_name(full_name):
+            return full_name.split()[-1] if full_name else ""
+
+        rows = []
+        if game.get("winning_pitcher"):
+            rows.append(f"W: {last_name(game['winning_pitcher'])}")
+        if game.get("losing_pitcher"):
+            rows.append(f"L: {last_name(game['losing_pitcher'])}")
+        if game.get("save_pitcher"):
+            rows.append(f"SV: {last_name(game['save_pitcher'])}")
+
+        y = LAYOUT["final"]["decisions"]["y_start"]
+        for row_text in rows:
+            rgbmatrix.graphics.DrawText(self.canvas, self.font_small,
+                                       LAYOUT["final"]["decisions"]["x"], y,
+                                       decision_color, row_text)
+            y += LAYOUT["final"]["decisions"]["row_height"]
 
     # ============= PREGAME =============
     def render_pregame(self, game):
@@ -482,9 +534,9 @@ class BaseballRenderer:
                                          game['inning']['number'])
             self.render_teams(game)
             self.render_balls_and_inning(game['count']['balls'], game['inning']['state'], game['inning']['number'])
-            self.render_pitcher(game.get('pitcher', ''))
+            self.render_pitcher(game.get('pitcher', ''), game.get('pitch_count', 0))
             self.render_batter(game.get('batter', ''))
-            self.render_play_result(game.get('play_result', ''))
+            self.render_play_result(game.get('play_result', ''), game.get('play_event', ''), game.get('last_pitch'))
             self.render_count(game['count']['strikes'], game['count']['outs'])
             self.render_bases(game.get('bases', {}))
         
