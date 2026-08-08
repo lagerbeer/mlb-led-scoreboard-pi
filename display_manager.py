@@ -23,6 +23,8 @@ import rgbmatrix.graphics
 from mlb_integration import mlb_fetcher
 from baseball_complete import BaseballRenderer
 from standings_screen import StandingsRenderer
+from flight_tracker import flight_fetcher
+from flight_screen import FlightScreenRenderer
 
 # Configuration file
 CONFIG_FILE = '/home/pi/mlb_scoreboard_pro/config.json'
@@ -79,8 +81,19 @@ class DisplayManager:
             # Create logo directory
             os.makedirs(LOGO_DIR, exist_ok=True)
             
-            # Display state - 4 modes
-            self.modes = ["weather", "stocks", "baseball", "standings"]
+            # Display state. self.screens is the single source of truth for what
+            # screens exist and their rotation order - adding a new screen means
+            # adding one entry here (plus its own draw_*/state setup) rather than
+            # touching dispatch logic in two places in run(). Built here rather
+            # than as a class-level dict since it binds to this instance's methods.
+            self.screens = {
+                "weather": self.draw_weather,
+                "stocks": self.draw_stocks,
+                "baseball": self.draw_baseball,
+                "standings": self.draw_standings,
+                "flights": self.draw_flights,
+            }
+            self.modes = list(self.screens.keys())
             self.current_mode_index = 0
             self.current_mode = self.modes[0]
             self.last_switch = time.time()
@@ -126,6 +139,15 @@ class DisplayManager:
             self.standings_cache = None
             self.last_standings_update = 0
             self.standings_renderer = StandingsRenderer()
+
+            # Flight state - refreshed every 60s (matches baseball's cadence).
+            # The unofficial FR24 API returns empty results if polled too
+            # frequently, so this must not be fetched on every frame.
+            self.flight_index = 0
+            self.flight_cache = []
+            self.last_flight_update = 0
+            self.last_flight_change = time.time()
+            self.flight_renderer = FlightScreenRenderer()
             
             # Clear screen on startup
             self.canvas.Fill(0, 0, 0)
@@ -545,6 +567,36 @@ class DisplayManager:
         except Exception as e:
             print(f"⚠️ Standings draw error: {e}")
 
+    # === FLIGHT FUNCTIONS ===
+    def draw_flights(self):
+        """Draw nearby aircraft, rotating through them like the baseball
+        screen rotates through games."""
+        try:
+            if time.time() - self.last_flight_update > 60:
+                flights = flight_fetcher.get_nearby_flights()
+                self.flight_cache = flights
+                print(f"✈️ Found {len(flights)} nearby aircraft")
+                self.last_flight_update = time.time()
+
+            if not self.flight_cache:
+                self.canvas.Fill(0, 0, 0)
+                rgbmatrix.graphics.DrawText(self.canvas, self.font_large, 14, 32, self.RED, "No Aircraft")
+                return
+
+            self.flight_index = self.flight_index % len(self.flight_cache)
+
+            flight_display_time = self.config.get('options', {}).get('flight_display_time', 8)
+            if time.time() - self.last_flight_change >= flight_display_time:
+                self.flight_index = (self.flight_index + 1) % len(self.flight_cache)
+                self.last_flight_change = time.time()
+
+            flight = self.flight_cache[self.flight_index]
+
+            self.flight_renderer.canvas = self.canvas
+            self.flight_renderer.render(flight, index=self.flight_index, total=len(self.flight_cache))
+        except Exception as e:
+            print(f"⚠️ Flight draw error: {e}")
+
     def run(self):
         """Main display loop"""
         print("🚀 Display manager running")
@@ -556,27 +608,16 @@ class DisplayManager:
                 # Check for reload flag
                 self.check_reload_flag()
                 
-                # Draw current screen
+                # Draw current screen - looked up from the registry built in
+                # __init__ rather than an if/elif chain, so a new screen only
+                # needs an entry in self.screens, not a change here.
                 if self.manual_mode and self.manual_screen:
-                    if self.manual_screen == "weather":
-                        self.draw_weather()
-                    elif self.manual_screen == "stocks":
-                        self.draw_stocks()
-                    elif self.manual_screen == "baseball":
-                        self.draw_baseball()
-                    elif self.manual_screen == "standings":
-                        self.draw_standings()
+                    draw_fn = self.screens.get(self.manual_screen)
+                    if draw_fn:
+                        draw_fn()
                 else:
                     rotation_rate = self.config.get('options', {}).get('rotation_rate', 20)
-
-                    if self.current_mode == "weather":
-                        self.draw_weather()
-                    elif self.current_mode == "stocks":
-                        self.draw_stocks()
-                    elif self.current_mode == "standings":
-                        self.draw_standings()
-                    else:
-                        self.draw_baseball()
+                    self.screens[self.current_mode]()
 
                     if time.time() - self.last_switch > rotation_rate:
                         self.current_mode_index = (self.current_mode_index + 1) % len(self.modes)

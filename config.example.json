@@ -14,6 +14,7 @@
     "rotation_rate": 35,
     "stock_display_time": 5,
     "baseball_display_time": 10,
+    "flight_display_time": 8,
     "preferred_team": "SF",
     "currency": "USD",
     "date_format": "MM/DD/YYYY",
@@ -31,5 +32,12 @@
       "META",
       "UPS"
     ]
+  },
+  "flight": {
+    "home_lat": 41.8781,
+    "home_lon": -87.6298,
+    "radius_km": 30,
+    "min_altitude_ft": 500,
+    "max_altitude_ft": 45000
   }
 }

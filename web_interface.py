@@ -354,6 +354,10 @@ HTML_TEMPLATE = '''
                     <div class="emoji">📊</div>
                     <div class="name">Standings</div>
                 </div>
+                <div class="screen-btn {{ 'active' if current_screen == 'flights' and mode == 'manual' }}" onclick="selectScreen('flights')">
+                    <div class="emoji">✈️</div>
+                    <div class="name">Flights</div>
+                </div>
             </div>
             
             <div class="action-bar">
@@ -465,8 +469,40 @@ HTML_TEMPLATE = '''
                     <button type="submit">Update Display</button>
                 </form>
             </div>
+
+            <!-- Flight Tracker Settings -->
+            <div class="card">
+                <h2>✈️ Flight Tracker Settings</h2>
+                <form action="/update_flight" method="post">
+                    <div class="form-group">
+                        <label>Home Latitude:</label>
+                        <input type="text" name="home_lat" value="{{ config.flight.home_lat }}" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Home Longitude:</label>
+                        <input type="text" name="home_lon" value="{{ config.flight.home_lon }}" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Search Radius (km):</label>
+                        <input type="number" name="radius_km" value="{{ config.flight.radius_km }}" min="5" max="150">
+                    </div>
+                    <div class="form-group">
+                        <label>Min Altitude (ft):</label>
+                        <input type="number" name="min_altitude_ft" value="{{ config.flight.min_altitude_ft }}" min="0" max="50000">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Altitude (ft):</label>
+                        <input type="number" name="max_altitude_ft" value="{{ config.flight.max_altitude_ft }}" min="0" max="50000">
+                    </div>
+                    <div class="form-group">
+                        <label>Time per Aircraft (seconds):</label>
+                        <input type="number" name="flight_display_time" value="{{ config.options.flight_display_time }}" min="3" max="20">
+                    </div>
+                    <button type="submit">Update Flight Tracker</button>
+                </form>
+            </div>
         </div>
-        
+
         <!-- System Status -->
         <div class="card">
             <h2>📊 System Status</h2>
@@ -541,6 +577,7 @@ HTML_TEMPLATE = '''
                 else if (name.includes('stock')) selectedScreen = 'stocks';
                 else if (name.includes('baseball')) selectedScreen = 'baseball';
                 else if (name.includes('standings')) selectedScreen = 'standings';
+                else if (name.includes('flights')) selectedScreen = 'flights';
                 
                 document.getElementById('selected_screen').value = selectedScreen;
             });
@@ -801,6 +838,7 @@ def load_config():
                 "rotation_rate": 20,
                 "stock_display_time": 5,
                 "baseball_display_time": 8,
+                "flight_display_time": 8,
                 "preferred_team": "SF",
                 "currency": "USD",
                 "date_format": "MM/DD/YYYY",
@@ -809,6 +847,13 @@ def load_config():
             },
             "tickers": {
                 "stocks": ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "NVDA", "META", "UPS"]
+            },
+            "flight": {
+                "home_lat": 41.8781,
+                "home_lon": -87.6298,
+                "radius_km": 30,
+                "min_altitude_ft": 500,
+                "max_altitude_ft": 45000
             }
         }
 
@@ -903,6 +948,25 @@ def update_display():
     save_config(config)
     trigger_reload()
     flash('Display settings updated!', 'success')
+    return redirect(url_for('index'))
+
+@app.route('/update_flight', methods=['POST'])
+def update_flight():
+    config = load_config()
+
+    if 'flight' not in config:
+        config['flight'] = {}
+
+    config['flight']['home_lat'] = float(request.form['home_lat'])
+    config['flight']['home_lon'] = float(request.form['home_lon'])
+    config['flight']['radius_km'] = int(request.form['radius_km'])
+    config['flight']['min_altitude_ft'] = int(request.form['min_altitude_ft'])
+    config['flight']['max_altitude_ft'] = int(request.form['max_altitude_ft'])
+    config['options']['flight_display_time'] = int(request.form['flight_display_time'])
+
+    save_config(config)
+    trigger_reload()
+    flash('Flight tracker settings updated!', 'success')
     return redirect(url_for('index'))
 
 @app.route('/restart', methods=['POST'])

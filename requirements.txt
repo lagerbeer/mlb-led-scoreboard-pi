@@ -1,4 +1,5 @@
 Flask==3.1.0
+FlightRadarAPI==1.5.1
 MLB-StatsAPI==1.8.1
 pillow==11.1.0
 requests==2.32.3

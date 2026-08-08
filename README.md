@@ -1,6 +1,6 @@
 # MLB LED Scoreboard (Pro)
 
-A Python app that drives a 128x64 RGB LED matrix panel on a Raspberry Pi, rotating between a live/upcoming MLB game, division standings, weather, and a stock ticker - with a Flask web control panel for configuration and manual screen control.
+A Python app that drives a 128x64 RGB LED matrix panel on a Raspberry Pi, rotating between a live/upcoming MLB game, division standings, nearby aircraft, weather, and a stock ticker - with a Flask web control panel for configuration and manual screen control.
 
 Not affiliated with MLB. Team names, logos, and data are property of MLB Advanced Media / their respective teams; this project just displays publicly available game data for personal use.
 
@@ -8,6 +8,7 @@ Not affiliated with MLB. Team names, logos, and data are property of MLB Advance
 
 - **Baseball screen** - live score, ball/strike/out count, base runners, scrolling pitcher/batter names, last play, and a no-hitter/perfect-game badge (driven by the MLB Stats API's own `noHitter`/`perfectGame` flags). When nothing's live, it scrolls through today's upcoming games instead of sitting on a blank screen.
 - **Standings screen** - shows the division standings for whichever team you've set as preferred, with that team's row highlighted in its own team color.
+- **Flight tracker screen** - shows nearby aircraft (callsign, altitude, speed, heading, route if known) within a configurable radius of home, rotating through whatever's currently overhead. Uses the unofficial FlightRadar24 API - no account or hardware receiver needed. (Ported from [ColinWaddell/FlightTracker](https://github.com/ColinWaddell/FlightTracker)'s approach - see Credits.)
 - **Weather screen** - current temp/humidity/clock via OpenWeatherMap (optional; falls back to manually-set values if no API key is configured).
 - **Stock ticker** - rotates through a configurable list of symbols with live price/change and a mini chart (Yahoo Finance, no API key needed).
 - **Web control panel** (`:5000`) - edit weather/stock/baseball/display settings, pick your preferred team, and manually pin the display to one specific screen.
@@ -82,15 +83,21 @@ Edit `config.json`:
 | `weather.location` | `City,State,Country` (e.g. `Chicago,il,us`) |
 | `weather.metric_units` | `true` for °C, `false` for °F |
 | `display.brightness` | 0-100 |
-| `options.rotation_rate` | Seconds each top-level screen (weather/stocks/baseball/standings) stays up before rotating to the next |
+| `options.rotation_rate` | Seconds each top-level screen (weather/stocks/baseball/standings/flights) stays up before rotating to the next |
 | `options.stock_display_time` | Seconds per stock symbol within the stocks screen |
 | `options.baseball_display_time` | Seconds per game within the baseball screen's own rotation |
+| `options.flight_display_time` | Seconds per aircraft within the flight screen's own rotation |
 | `options.preferred_team` | MLB team abbreviation (e.g. `SF`) - this team's live game takes priority, and drives which division shows on the standings screen |
 | `tickers.stocks` | List of stock ticker symbols to rotate through |
+| `flight.home_lat` / `flight.home_lon` | Decimal coordinates of the panel's location - aircraft distance/search radius is measured from here. Look these up once (e.g. via a geocoding API or Google Maps) and hardcode them; the app doesn't do this for you. |
+| `flight.radius_km` | Search radius around home, in km |
+| `flight.min_altitude_ft` / `flight.max_altitude_ft` | Altitude band to include - the default (500-45,000 ft) filters out ground traffic at nearby airports |
 
 `config.json` is gitignored since it holds your API key - everything else in the repo is safe to commit.
 
 `options.stock_api_key`, `options.currency`, `options.date_format`, `options.show_logos`, and `options.chart_period` exist in the config file for historical reasons but aren't currently read by any code - safe to ignore.
+
+The flight screen uses the unofficial FlightRadar24 API (via the `FlightRadarAPI` package), which rate-limits (returns empty results) if polled too often. `display_manager.py` caches flight data for 60 seconds for this reason - don't lower that interval without a good reason.
 
 ### 4. Install as systemd services
 
@@ -106,20 +113,44 @@ The web control panel is then available at `http://<pi-ip>:5000`.
 
 ## Usage
 
-- **Auto rotation** (default): cycles through weather → stocks → baseball → standings on a timer (`options.rotation_rate`).
-- **Manual screen override**: from the control panel, pin the display to one screen type (Weather/Stocks/Baseball/Standings) until you switch back to auto rotation.
+- **Auto rotation** (default): cycles through weather → stocks → baseball → standings → flights on a timer (`options.rotation_rate`).
+- **Manual screen override**: from the control panel, pin the display to one screen type (Weather/Stocks/Baseball/Standings/Flights) until you switch back to auto rotation.
 - **Pick a specific game**: from the Games page (`/games`), hit "Show on Matrix" on any game to pin the display to that exact game, live or upcoming. It stays pinned until you resume auto rotation or pick another screen/game.
 
 Config changes made through the web UI take effect immediately - the display process picks them up via a signal/reload flag, no restart needed.
+
+## Adding a new screen
+
+`display_manager.py` rotates screens by looking them up in a single dict built in `__init__`:
+
+```python
+self.screens = {
+    "weather": self.draw_weather,
+    "stocks": self.draw_stocks,
+    "baseball": self.draw_baseball,
+    "standings": self.draw_standings,
+    "flights": self.draw_flights,
+}
+self.modes = list(self.screens.keys())  # rotation order = insertion order
+```
+
+Both the manual-screen-override dispatch and the auto-rotation dispatch in `run()` look a screen up from this dict rather than branching on its name - adding a screen doesn't touch dispatch logic at all. To add one:
+
+1. Write a renderer, ideally in its own file mirroring `standings_screen.py` or `flight_screen.py`: a class that takes `self.canvas` (assigned by `display_manager.py` right before each render call) and a `render(...)` method that draws directly via `rgbmatrix.graphics` calls, sized for the 128x64 panel.
+2. Write a `draw_x(self)` method on `DisplayManager` that owns that screen's own cache/rotation state (see `draw_baseball`/`draw_flights` for the pattern: cache data for N seconds, fall back to a message if empty, rotate through multiple items on its own timer if applicable).
+3. Add one line to `self.screens` in `__init__`. That's it - it's now in both manual selection and auto rotation.
+4. If it needs a web UI settings card or a manual-selector button, follow the pattern of any existing card/button in `web_interface.py` (they're all independent copy-paste templates, not driven by a shared registry - there's no equivalent abstraction needed there since it's one page, not a dispatch loop).
 
 ## Project structure
 
 | File | Purpose |
 |---|---|
-| `display_manager.py` | Main loop - owns the RGBMatrix canvas, rotates between screens, renders weather/stocks itself, delegates baseball/standings to their dedicated renderers |
+| `display_manager.py` | Main loop - owns the RGBMatrix canvas, rotates between screens via the `self.screens` registry (see "Adding a new screen" below), renders weather/stocks itself, delegates baseball/standings/flights to their dedicated renderers |
 | `baseball_complete.py` | `BaseballRenderer` - live/pregame/final game rendering |
 | `standings_screen.py` | `StandingsRenderer` - division standings rendering |
+| `flight_screen.py` | `FlightScreenRenderer` - nearby aircraft rendering |
 | `mlb_integration.py` | MLB Stats API wrapper - today's games, live game detail, standings, team-name/code/color lookups |
+| `flight_tracker.py` | FlightRadar24 wrapper - nearby aircraft within the configured radius/altitude band |
 | `web_interface.py` | Flask control panel + Games page |
 | `colors_elements.json` | Per-element color overrides (counts, no-hitter badge, standings header, etc.) |
 | `colors_teams.json` | Per-team background/text/accent colors |
@@ -130,3 +161,4 @@ Config changes made through the web UI take effect immediately - the display pro
 - [MLB-StatsAPI](https://github.com/toddrob99/MLB-StatsAPI) for the Python wrapper around MLB's Stats API
 - [rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix) by hzeller for the matrix driver and Python bindings
 - [MLB-LED-Scoreboard](https://github.com/MLB-LED-Scoreboard/mlb-led-scoreboard) - the standings and no-hitter/perfect-game indicator features were inspired by this project's design
+- [ColinWaddell/FlightTracker](https://github.com/ColinWaddell/FlightTracker) - the flight screen's approach (using the unofficial FlightRadar24 API for nearby-aircraft data) is inspired by this project, though the fetch/render code here is a from-scratch, much simpler implementation sized for this panel rather than a port of FlightTracker's own scene framework
