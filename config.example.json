@@ -1,0 +1,35 @@
+{
+  "weather": {
+    "apikey": "YOUR_OPENWEATHERMAP_API_KEY",
+    "location": "Chicago,il,us",
+    "metric_units": false,
+    "temp": "72",
+    "humidity": "45"
+  },
+  "display": {
+    "brightness": 60
+  },
+  "options": {
+    "stock_api_key": "YOUR_STOCK_API_KEY",
+    "rotation_rate": 35,
+    "stock_display_time": 5,
+    "baseball_display_time": 10,
+    "preferred_team": "SF",
+    "currency": "USD",
+    "date_format": "MM/DD/YYYY",
+    "show_logos": true,
+    "chart_period": "1d"
+  },
+  "tickers": {
+    "stocks": [
+      "AAPL",
+      "GOOGL",
+      "MSFT",
+      "AMZN",
+      "TSLA",
+      "NVDA",
+      "META",
+      "UPS"
+    ]
+  }
+}
