@@ -3,10 +3,10 @@
 Flight Screen - shows one nearby aircraft at a time
 
 Layout follows the reference project's approach (ColinWaddell/FlightTracker):
-three big, centered rows - route, callsign, aircraft type - rather than
-cramming altitude/speed/heading/distance in alongside them. Our panel is
-larger than theirs (128x64 vs their smaller board) so everything is drawn
-bigger/more spaced out, but the "fewer, bigger lines" lesson is the same.
+three big, centered rows - route, callsign, aircraft type - as the visual
+focus, rather than cramming everything in at the same size. Altitude/speed
+still get shown, but as a smaller fourth row rather than competing for
+attention with the main three.
 """
 
 import json
@@ -19,6 +19,7 @@ LAYOUT = {
     "route": {"y": 16},
     "callsign": {"y": 34},
     "aircraft": {"y": 50},
+    "telemetry": {"y": 60},
     "counter": {"x": 108, "y": 8}
 }
 
@@ -85,3 +86,9 @@ class FlightScreenRenderer:
         if aircraft_code:
             aircraft_color = self.get_color("flight.aircraft", (200, 130, 255))
             self._draw_centered(self.font_large, LAYOUT["aircraft"]["y"], aircraft_color, aircraft_code)
+
+        # Smaller row below the three main ones - keeps route/callsign/aircraft
+        # as the visual focus while still surfacing altitude/speed.
+        telemetry_text = f"{flight['altitude_ft']:,}ft @ {flight['ground_speed_kt']}kt"
+        telemetry_color = self.get_color("flight.detail", (150, 150, 150))
+        self._draw_centered(self.font_small, LAYOUT["telemetry"]["y"], telemetry_color, telemetry_text)
