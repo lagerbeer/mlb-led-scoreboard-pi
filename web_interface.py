@@ -109,6 +109,15 @@ HTML_TEMPLATE = '''
             font-size: 16px;
             transition: all 0.3s;
         }
+
+        /* The <select> itself picks up color:white above, but most browsers
+           render the opened options popup on their own plain white
+           background rather than inheriting the semi-transparent dark one -
+           without this, options are invisible (white-on-white) until hovered. */
+        select option {
+            background: #1a1a2e;
+            color: white;
+        }
         
         input:focus, select:focus {
             outline: none;
