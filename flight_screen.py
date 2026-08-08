@@ -9,12 +9,17 @@ import rgbmatrix.graphics
 with open('/home/pi/mlb_scoreboard_pro/colors_elements.json', 'r') as f:
     ELEMENT_COLORS = json.load(f)
 
+# Rows below the callsign are spaced 10px apart (alt/heading, speed, route,
+# distance) - previously speed was drawn at detail_left.y+10=40 while route
+# was hardcoded to y=42, just 2px below it, so the route text visually
+# overlapped the speed text instead of sitting in its own row.
 LAYOUT = {
     "callsign": {"y": 14},
-    "detail_left": {"x": 6, "y": 30},
-    "detail_right": {"x": 70, "y": 30},
-    "route": {"x": 6, "y": 42},
-    "distance": {"x": 6, "y": 54},
+    "detail_left": {"x": 6, "y": 28},
+    "detail_right": {"x": 70, "y": 28},
+    "speed": {"x": 6, "y": 38},
+    "route": {"x": 6, "y": 48},
+    "distance": {"x": 6, "y": 58},
     "counter": {"x": 108, "y": 8}
 }
 
@@ -92,7 +97,7 @@ class FlightScreenRenderer:
 
         speed_text = f"GS {flight['ground_speed_kt']}kt"
         rgbmatrix.graphics.DrawText(self.canvas, self.font_small,
-                                   LAYOUT["detail_left"]["x"], LAYOUT["detail_left"]["y"] + 10,
+                                   LAYOUT["speed"]["x"], LAYOUT["speed"]["y"],
                                    detail_color, speed_text)
 
         route_color = self.get_color("flight.route", (96, 239, 255))
