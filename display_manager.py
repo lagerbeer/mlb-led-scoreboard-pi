@@ -88,7 +88,8 @@ class DisplayManager:
             # Manual mode flag
             self.manual_mode = False
             self.manual_screen = None
-            
+            self.manual_game_id = None  # set when the web UI picks one specific game
+
             # Load initial mode
             self.load_mode()
             
@@ -110,7 +111,13 @@ class DisplayManager:
             self.baseball_cache = []
             self.last_baseball_update = 0
             self.last_baseball_change = time.time()
-            
+
+            # Manually-selected single game (from the Games web page) - separate
+            # cache from the auto-rotation one above since it tracks one specific
+            # gamePk instead of "whatever's live/upcoming right now".
+            self.selected_game_cache = None
+            self.last_selected_game_update = 0
+
             # Baseball renderer
             self.baseball_renderer = BaseballRenderer()
 
@@ -186,8 +193,10 @@ class DisplayManager:
                     mode_data = json.load(f)
                     self.manual_mode = (mode_data.get('mode') == 'manual')
                     self.manual_screen = mode_data.get('screen')
+                    self.manual_game_id = mode_data.get('game_id')
                     if self.manual_mode:
-                        print(f"🎯 Manual mode: showing {self.manual_screen}")
+                        detail = f" (game {self.manual_game_id})" if self.manual_game_id else ""
+                        print(f"🎯 Manual mode: showing {self.manual_screen}{detail}")
                     else:
                         print("🔄 Auto rotation mode")
         except:
@@ -469,18 +478,36 @@ class DisplayManager:
     def draw_baseball(self):
         """Draw baseball screen with internal rotation"""
         try:
+            # A specific game picked on the Games web page overrides the usual
+            # live/upcoming rotation entirely - refreshed every 15s (faster than
+            # the 60s auto-rotation cache) since the whole point of picking one
+            # game is to watch it closely.
+            if self.manual_mode and self.manual_screen == 'baseball' and self.manual_game_id:
+                if not self.selected_game_cache or time.time() - self.last_selected_game_update > 15:
+                    self.selected_game_cache = mlb_fetcher.get_game_by_id(self.manual_game_id)
+                    self.last_selected_game_update = time.time()
+
+                if not self.selected_game_cache:
+                    self.canvas.Fill(0, 0, 0)
+                    rgbmatrix.graphics.DrawText(self.canvas, self.font_large, 8, 32, self.RED, "Game Not Found")
+                    return
+
+                self.baseball_renderer.canvas = self.canvas
+                self.baseball_renderer.render_game(self.selected_game_cache)
+                return
+
             # Update games list periodically - always replace the cache (even with an
             # empty list) so a game ending clears it instead of leaving stale data on screen.
             if time.time() - self.last_baseball_update > 60:
                 games = mlb_fetcher.get_games_for_display()
                 self.baseball_cache = games
-                print(f"📊 Loaded {len(games)} live game(s) for display")
+                print(f"📊 Loaded {len(games)} game(s) for display")
                 self.last_baseball_update = time.time()
 
             if not self.baseball_cache:
-                # No live games right now
+                # No live or upcoming games today
                 self.canvas.Fill(0, 0, 0)
-                rgbmatrix.graphics.DrawText(self.canvas, self.font_large, 20, 32, self.RED, "No Live Games")
+                rgbmatrix.graphics.DrawText(self.canvas, self.font_large, 14, 32, self.RED, "No Games Today")
                 return
 
             # Keep the index in range in case the cache shrank since the last rotation.

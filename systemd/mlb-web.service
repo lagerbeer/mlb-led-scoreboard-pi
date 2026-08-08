@@ -1,0 +1,14 @@
+[Unit]
+Description=MLB Scoreboard Web Interface
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/mlb_scoreboard_pro
+ExecStart=/home/pi/mlb_scoreboard_venv/bin/python /home/pi/mlb_scoreboard_pro/web_interface.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -448,15 +448,26 @@ class BaseballRenderer:
 
     # ============= PREGAME =============
     def render_pregame(self, game):
-        """Render pregame screen"""
+        """Render pregame screen: team matchup, plus a centered first-pitch
+        time below it (start_time_local is already converted to the system's
+        local timezone by mlb_integration.py - the API only gives UTC)."""
         self.render_headers()
         self.render_teams(game)
-        
-        if 'start_time' in game and game['start_time']:
-            time_color = self.get_color("pregame.start_time", (255, 235, 59))
-            time_str = game['start_time'][11:16] if len(game['start_time']) > 16 else "7:05"
-            rgbmatrix.graphics.DrawText(self.canvas, self.font_small,
-                                       50, 52, time_color, f"First pitch {time_str}")
+
+        time_str = game.get('start_time_local') or 'TBD'
+
+        label = "First Pitch"
+        label_color = self.get_color("pregame.scrolling_text", (255, 235, 59))
+        label_width = self.text_width(self.font_small, label)
+        rgbmatrix.graphics.DrawText(self.canvas, self.font_small,
+                                   (128 - label_width) // 2, 46,
+                                   label_color, label)
+
+        time_color = self.get_color("pregame.start_time", (255, 235, 59))
+        time_width = self.text_width(self.font_large, time_str)
+        rgbmatrix.graphics.DrawText(self.canvas, self.font_large,
+                                   (128 - time_width) // 2, 60,
+                                   time_color, time_str)
 
     # ============= MAIN RENDER METHOD =============
     def render_game(self, game):

@@ -1,0 +1,15 @@
+[Unit]
+Description=MLB Scoreboard Display Manager
+After=network.target
+Wants=mlb-web.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/pi/mlb_scoreboard_pro
+ExecStart=/home/pi/mlb_scoreboard_venv/bin/python /home/pi/mlb_scoreboard_pro/display_manager.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

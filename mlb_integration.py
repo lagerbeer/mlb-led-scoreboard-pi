@@ -13,6 +13,19 @@ logger = logging.getLogger("mlb")
 
 CONFIG_FILE = '/home/pi/mlb_scoreboard_pro/config.json'
 
+def format_local_time(iso_utc_str):
+    """Converts a UTC ISO8601 timestamp (as returned by the schedule API's
+    game_datetime, e.g. "2026-08-08T19:05:00Z") to a friendly local time
+    string like "3:05 PM", using the system's local timezone."""
+    if not iso_utc_str:
+        return ''
+    try:
+        dt = datetime.fromisoformat(iso_utc_str.replace('Z', '+00:00'))
+        local = dt.astimezone()
+        return local.strftime('%I:%M %p').lstrip('0')
+    except Exception:
+        return ''
+
 DIVISION_SHORT_NAMES = {
     "American League East": "AL East",
     "American League Central": "AL Central",
@@ -297,7 +310,8 @@ class MLBDataFetcher:
                     'play_result': play_result,
                     'no_hitter': no_hitter,
                     'perfect_game': perfect_game,
-                    'start_time': game.get('game_datetime', '')
+                    'start_time': game.get('game_datetime', ''),
+                    'start_time_local': format_local_time(game.get('game_datetime', ''))
                 }
                 processed_games.append(game_data)
             
@@ -330,21 +344,42 @@ class MLBDataFetcher:
         return preferred_game, other_games
 
     def get_games_for_display(self):
-        """Get games to display - only live (in-progress) games. If the preferred
-        team is live, show only their game; otherwise show all other live games."""
+        """Get games to display. Prioritizes the preferred team's live game, then
+        any other live games, then - if nothing is live - today's upcoming
+        (pregame) games sorted by start time, so the screen has something to
+        scroll through instead of sitting on a blank "no live games" message."""
         preferred_game, other_games = self.get_giants_game()
 
         if preferred_game and preferred_game['status'] == 'live':
             print(f"🎯 {self._get_preferred_code()} is live - showing only their game")
             return [preferred_game]
 
-        live_others = [g for g in other_games if g['status'] == 'live']
+        all_games = ([preferred_game] if preferred_game else []) + other_games
+
+        live_others = [g for g in all_games if g['status'] == 'live']
         if live_others:
             print(f"📊 Showing {len(live_others)} live game(s)")
             return live_others
 
-        print(f"📅 No live games right now")
+        upcoming = sorted(
+            (g for g in all_games if g['status'] == 'pregame'),
+            key=lambda g: g.get('start_time', '')
+        )
+        if upcoming:
+            print(f"🗓️ No live games - showing {len(upcoming)} upcoming game(s)")
+            return upcoming
+
+        print(f"📅 No live or upcoming games right now")
         return []
+
+    def get_game_by_id(self, game_id):
+        """Look up one specific game from today's full slate by its MLB gamePk -
+        used when the web UI has the user pick an exact game to show, rather
+        than the usual live/upcoming rotation."""
+        for game in self.get_today_games():
+            if str(game.get('game_id')) == str(game_id):
+                return game
+        return None
 
     def get_standings_for_display(self):
         """Standings for the preferred team's division. Hits the API fresh on

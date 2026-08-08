@@ -11,7 +11,7 @@ import subprocess
 import signal
 import time
 
-from mlb_integration import TEAM_NAME_TO_CODE
+from mlb_integration import TEAM_NAME_TO_CODE, mlb_fetcher
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
@@ -317,7 +317,11 @@ HTML_TEMPLATE = '''
 <body>
     <div class="container">
         <h1>⚾ MLB Scoreboard Pro Control Panel ⚾</h1>
-        
+
+        <div style="text-align:center; margin-bottom: 20px;">
+            <a href="/games" style="display:inline-block; background: linear-gradient(45deg, #00ff87, #60efff); color: #1a1a2e; padding: 12px 25px; border-radius: 10px; font-size: 16px; font-weight: 600; text-decoration: none; box-shadow: 0 4px 15px rgba(0,255,135,0.3);">📅 View All Games</a>
+        </div>
+
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
@@ -557,6 +561,181 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
+GAMES_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MLB Games</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #fff;
+        }
+
+        .container { max-width: 900px; margin: 0 auto; }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2.2em;
+            background: linear-gradient(45deg, #00ff87, #60efff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .top-links { text-align: center; margin-bottom: 25px; }
+
+        .top-links a, .top-links button {
+            display: inline-block;
+            background: linear-gradient(45deg, #00ff87, #60efff);
+            color: #1a1a2e;
+            padding: 10px 20px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            text-decoration: none;
+            border: none;
+            cursor: pointer;
+            margin: 0 5px;
+        }
+
+        .top-links .btn-success { background: linear-gradient(45deg, #00b09b, #96c93d); color: white; }
+
+        .alert {
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .alert-success { background: rgba(0,255,135,0.2); border: 1px solid #00ff87; color: #00ff87; }
+        .alert-error { background: rgba(255,65,108,0.2); border: 1px solid #ff416c; color: #ff416c; }
+
+        .game-card {
+            background: rgba(255,255,255,0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 18px 20px;
+            margin-bottom: 15px;
+            border: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .game-card.selected { border-color: #00ff87; box-shadow: 0 0 15px rgba(0,255,135,0.3); }
+
+        .game-info { flex: 1; min-width: 200px; }
+
+        .matchup { font-size: 1.2em; font-weight: 600; margin-bottom: 4px; }
+
+        .game-meta { color: #60efff; font-size: 0.9em; }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 700;
+            margin-right: 8px;
+            text-transform: uppercase;
+        }
+        .badge-live { background: #ff416c; color: white; }
+        .badge-upcoming { background: #f7971e; color: #1a1a2e; }
+        .badge-final { background: #60efff; color: #1a1a2e; }
+        .badge-other { background: #666; color: white; }
+
+        .game-actions button {
+            background: linear-gradient(45deg, #00ff87, #60efff);
+            color: #1a1a2e;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .game-actions button.active {
+            background: linear-gradient(45deg, #00b09b, #96c93d);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #60efff;
+            font-size: 1.1em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📅 Today's MLB Games</h1>
+        <div class="top-links">
+            <a href="/">⚙️ Control Panel</a>
+            <form action="/set_auto" method="post" style="display:inline;">
+                <button type="submit" class="btn-success">🔄 Resume Auto Rotation</button>
+            </form>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% if not games %}
+            <div class="empty-state">No games scheduled today.</div>
+        {% endif %}
+
+        {% for game in games %}
+        <div class="game-card {{ 'selected' if selected_game_id == game.game_id|string }}">
+            <div class="game-info">
+                <div>
+                    {% if game.status == 'live' %}
+                        <span class="badge badge-live">Live</span>
+                    {% elif game.status == 'pregame' %}
+                        <span class="badge badge-upcoming">Upcoming</span>
+                    {% elif game.status == 'final' %}
+                        <span class="badge badge-final">Final</span>
+                    {% else %}
+                        <span class="badge badge-other">{{ game.status }}</span>
+                    {% endif %}
+                </div>
+                <div class="matchup">{{ game.away.code }} @ {{ game.home.code }}</div>
+                <div class="game-meta">
+                    {% if game.status == 'live' %}
+                        {{ game.away.runs }} - {{ game.home.runs }} &middot; {{ game.inning.state }} {{ game.inning.number }}
+                    {% elif game.status == 'final' %}
+                        Final: {{ game.away.runs }} - {{ game.home.runs }}
+                    {% elif game.status == 'pregame' %}
+                        First pitch {{ game.start_time_local or 'TBD' }}
+                    {% endif %}
+                </div>
+            </div>
+            <div class="game-actions">
+                <form action="/select_game" method="post">
+                    <input type="hidden" name="game_id" value="{{ game.game_id }}">
+                    <button type="submit" class="{{ 'active' if selected_game_id == game.game_id|string }}">
+                        {{ '▶ Showing Now' if selected_game_id == game.game_id|string else 'Show on Matrix' }}
+                    </button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</body>
+</html>
+'''
+
 def trigger_reload():
     """Trigger the display manager to reload configuration"""
     # Create reload flag
@@ -585,11 +764,11 @@ def get_display_mode():
         pass
     return {'mode': 'auto', 'screen': None}
 
-def set_display_mode(mode, screen=None):
+def set_display_mode(mode, screen=None, game_id=None):
     """Set display mode"""
     with open(MODE_FILE, 'w') as f:
-        json.dump({'mode': mode, 'screen': screen}, f)
-    
+        json.dump({'mode': mode, 'screen': screen, 'game_id': game_id}, f)
+
     # Trigger reload
     trigger_reload()
 
@@ -743,6 +922,29 @@ def start():
     subprocess.run(['sudo', 'systemctl', 'start', 'mlb-weather.service'])
     flash('Display started!', 'success')
     return redirect(url_for('index'))
+
+@app.route('/games')
+def games_page():
+    games = mlb_fetcher.get_today_games()
+
+    status_order = {'live': 0, 'pregame': 1, 'final': 2}
+    games.sort(key=lambda g: (status_order.get(g['status'], 3), g.get('start_time', '')))
+
+    mode_data = get_display_mode()
+    selected_game_id = str(mode_data.get('game_id')) if mode_data.get('mode') == 'manual' and mode_data.get('game_id') else None
+
+    return render_template_string(
+        GAMES_TEMPLATE,
+        games=games,
+        selected_game_id=selected_game_id
+    )
+
+@app.route('/select_game', methods=['POST'])
+def select_game():
+    game_id = request.form['game_id']
+    set_display_mode('manual', 'baseball', game_id=game_id)
+    flash('✅ Showing selected game on the display', 'success')
+    return redirect(url_for('games_page'))
 
 @app.route('/api/mode', methods=['GET'])
 def api_mode():
