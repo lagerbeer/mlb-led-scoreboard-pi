@@ -114,6 +114,12 @@ class DisplayManager:
             self.stock_cache = {}
             self.last_stock_update = 0
             self.last_stock_change = time.time()
+
+            # Per-field scroll position for text too wide to fit its area -
+            # same mechanism as BaseballRenderer._scroll (mirrors it here
+            # since this class owns weather/stocks text directly rather than
+            # delegating to a dedicated renderer).
+            self._scroll = {}
             
             # Weather state
             self.weather_cache = None
@@ -309,7 +315,47 @@ class DisplayManager:
                             self.canvas.SetPixel(canvas_x, canvas_y, r, g, b)
         except Exception as e:
             print(f"⚠️ Logo draw error: {e}")
-    
+
+    # === SCROLLING TEXT ===
+    # Same technique as BaseballRenderer.draw_scrolling_text: draws text once
+    # if it fits, otherwise scrolls it right-to-left with a wraparound gap.
+    def text_width(self, font, text):
+        return sum(font.CharacterWidth(ord(ch)) for ch in text)
+
+    def draw_scrolling_text(self, key, font, x, y, max_width, color, text):
+        state = self._scroll.get(key)
+        if state is None or state["text"] != text:
+            state = {"text": text, "offset": 0}
+            self._scroll[key] = state
+
+        width = self.text_width(font, text)
+        if width <= max_width:
+            rgbmatrix.graphics.DrawText(self.canvas, font, x, y, color, text)
+            state["offset"] = 0
+            return
+
+        gap = "   "
+        padded_text = text + gap
+        padded_width = self.text_width(font, padded_text)
+        clip_right = x + max_width
+
+        self._draw_clipped_text(font, x - state["offset"], y, x, clip_right, color, padded_text)
+        self._draw_clipped_text(font, x - state["offset"] + padded_width, y, x, clip_right, color, padded_text)
+
+        state["offset"] += 1
+        if state["offset"] >= padded_width:
+            state["offset"] = 0
+
+    def _draw_clipped_text(self, font, start_x, y, clip_left, clip_right, color, text):
+        cx = start_x
+        for ch in text:
+            w = font.CharacterWidth(ord(ch))
+            if clip_left <= cx < clip_right:
+                rgbmatrix.graphics.DrawText(self.canvas, font, cx, y, color, ch)
+            cx += w
+            if cx >= clip_right:
+                break
+
     # === WEATHER FUNCTIONS ===
     def get_weather(self):
         """Get weather data"""
@@ -386,13 +432,23 @@ class DisplayManager:
             print(f"⚠️ Weather draw error: {e}")
     
     # === STOCK FUNCTIONS ===
+    # Trimmed off the end of a company's long name for a cleaner fit on a
+    # small display ("Apple Inc." -> "Apple") - same suffix list used by
+    # feram18/led-stock-ticker, a similar RGB-matrix stock ticker project.
+    NAME_SUFFIXES = ['Company', 'Corporation', 'Holdings', 'Incorporated', 'Inc', '.com', '(The)']
+
+    def _clean_company_name(self, name):
+        for suffix in self.NAME_SUFFIXES:
+            name = name.replace(suffix, '')
+        return name.rstrip('& .,').rstrip()
+
     def get_stock_data(self, symbol):
         """Get stock data from Yahoo Finance"""
         try:
             headers = {'User-Agent': 'Mozilla/5.0'}
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
             response = requests.get(url, timeout=10, headers=headers)
-            
+
             if response.status_code == 200:
                 data = response.json()
                 if 'chart' in data and data['chart']['result']:
@@ -402,15 +458,29 @@ class DisplayManager:
                     prev_close = meta.get('previousClose', price)
                     change = price - prev_close
                     change_pct = (change / prev_close * 100) if prev_close > 0 else 0
-                    
+
+                    name = meta.get('longName') or meta.get('shortName') or symbol
+                    name = self._clean_company_name(name)
+
+                    # No explicit "market state" field on this endpoint - derive
+                    # it from whether now falls inside today's regular session.
+                    is_market_open = False
+                    try:
+                        regular = meta['currentTradingPeriod']['regular']
+                        is_market_open = regular['start'] <= time.time() <= regular['end']
+                    except (KeyError, TypeError):
+                        pass
+
                     # Get chart data
                     indicators = result.get('indicators', {})
                     quote = indicators.get('quote', [{}])[0]
                     closes = quote.get('close', [])
                     prices = [p for p in closes if p is not None][-20:]
-                    
+
                     return {
                         'symbol': symbol,
+                        'name': name,
+                        'is_market_open': is_market_open,
                         'price': round(price, 2),
                         'change': round(change, 2),
                         'change_pct': round(change_pct, 2),
@@ -418,12 +488,14 @@ class DisplayManager:
                     }
         except Exception as e:
             print(f"⚠️ Stock fetch error for {symbol}: {e}")
-        
+
         # Fallback
         base = 100 + (hash(symbol) % 200)
         prices = [base * (1 + 0.01 * (i % 5 - 2)) for i in range(20)]
         return {
             'symbol': symbol,
+            'name': symbol,
+            'is_market_open': False,
             'price': base,
             'change': base * 0.01,
             'change_pct': 1.0,
@@ -438,32 +510,43 @@ class DisplayManager:
                 self.canvas.SetPixel(x + 2 + dx, y + row, color.red, color.green, color.blue)
 
     def draw_stock(self, stock):
-        """Draw a single stock screen, Yahoo Finance style: logo/symbol/price
-        at top, change with a trend arrow (colored and signed the same way
-        for both the dollar amount and the percent), then a filled area
-        chart in that same trend color."""
+        """Draw a single stock screen, Yahoo Finance style: a market-status
+        bar + logo/symbol/price at top, the company name below that
+        (scrolling if too wide), change with a trend arrow (colored and
+        signed the same way for both the dollar amount and the percent),
+        then a filled area chart in that same trend color. Layout and the
+        market-status-bar idea are adapted from feram18/led-stock-ticker,
+        another RGB-matrix stock ticker built for the same 128x64 panel."""
         try:
             self.canvas.Fill(0, 0, 0)
 
-            self.draw_logo(2, 2, stock['symbol'])
+            status_color = self.GREEN if stock.get('is_market_open') else self.RED
+            for sy in range(2, 18):
+                self.canvas.SetPixel(0, sy, status_color.red, status_color.green, status_color.blue)
+                self.canvas.SetPixel(1, sy, status_color.red, status_color.green, status_color.blue)
 
-            rgbmatrix.graphics.DrawText(self.canvas, self.font_large, 20, 15, self.YELLOW, stock['symbol'])
+            self.draw_logo(4, 2, stock['symbol'])
+
+            rgbmatrix.graphics.DrawText(self.canvas, self.font_large, 22, 15, self.YELLOW, stock['symbol'])
 
             price = f"${stock['price']:.2f}"
             price_len = len(price) * 10
             rgbmatrix.graphics.DrawText(self.canvas, self.font_clock, 127 - price_len, 15, self.WHITE, price)
+
+            name = stock.get('name') or stock['symbol']
+            self.draw_scrolling_text('stock_name', self.font_small, 4, 26, 122, self.GRAY, name)
 
             change = stock['change']
             is_up = change >= 0
             trend_color = self.GREEN if is_up else self.RED
             sign = '+' if is_up else ''
 
-            self.draw_trend_arrow(4, 23, is_up, trend_color)
+            self.draw_trend_arrow(4, 29, is_up, trend_color)
             change_text = f"{sign}{change:.2f} ({sign}{stock['change_pct']:.2f}%)"
-            rgbmatrix.graphics.DrawText(self.canvas, self.font_small, 14, 30, trend_color, change_text)
+            rgbmatrix.graphics.DrawText(self.canvas, self.font_small, 14, 36, trend_color, change_text)
 
             if 'prices' in stock and len(stock['prices']) > 1:
-                self.draw_chart(stock['prices'], 4, 36, 120, 18, trend_color)
+                self.draw_chart(stock['prices'], 4, 42, 120, 19, trend_color)
 
             # Progress bar sits below the chart now - it used to be drawn at a
             # fixed y=58 while the chart spanned y=40-60, so it overlapped
@@ -471,7 +554,7 @@ class DisplayManager:
             progress = (time.time() - self.last_stock_change) / self.config['options']['stock_display_time']
             bar_width = int(120 * min(1.0, progress))
             for i in range(bar_width):
-                self.canvas.SetPixel(4 + i, 60, 80, 80, 80)
+                self.canvas.SetPixel(4 + i, 63, 80, 80, 80)
         except Exception as e:
             print(f"⚠️ Stock draw error: {e}")
     

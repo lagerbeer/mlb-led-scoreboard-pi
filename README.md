@@ -10,7 +10,7 @@ Not affiliated with MLB. Team names, logos, and data are property of MLB Advance
 - **Standings screen** - shows the division standings for whichever team you've set as preferred, with that team's row highlighted in its own team color.
 - **Flight tracker screen** - three big centered rows (route, callsign, aircraft type) for whatever's currently overhead within a configurable radius of home, styled after the reference project's own display rather than cramming in every telemetry field at once. Uses the unofficial FlightRadar24 API - no account or hardware receiver needed. (Approach inspired by [ColinWaddell/FlightTracker](https://github.com/ColinWaddell/FlightTracker) - see Credits.)
 - **Weather screen** - current temp/humidity/clock via OpenWeatherMap (optional; falls back to manually-set values if no API key is configured).
-- **Stock ticker** - rotates through a configurable list of symbols with live price/change and a mini chart (Yahoo Finance, no API key needed).
+- **Stock ticker** - rotates through a configurable list of symbols, Yahoo-Finance-styled: company logo, name, and a market-open/closed status bar up top, price and signed change/percent with a trend arrow, and a filled area chart colored to match the day's trend (Yahoo Finance's own chart endpoint, no API key needed). Layout adapted from [feram18/led-stock-ticker](https://github.com/feram18/led-stock-ticker) - see Credits.
 - **Web control panel** (`:5000`) - edit weather/stock/baseball/display settings, pick your preferred team, and manually pin the display to one specific screen.
 - **Games page** (`:5000/games`) - browse every game scheduled today (live, upcoming, or final) and push any one of them to the matrix on demand.
 
@@ -162,3 +162,4 @@ Both the manual-screen-override dispatch and the auto-rotation dispatch in `run(
 - [rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix) by hzeller for the matrix driver and Python bindings
 - [MLB-LED-Scoreboard](https://github.com/MLB-LED-Scoreboard/mlb-led-scoreboard) - the standings and no-hitter/perfect-game indicator features were inspired by this project's design
 - [ColinWaddell/FlightTracker](https://github.com/ColinWaddell/FlightTracker) - the flight screen's approach (using the unofficial FlightRadar24 API for nearby-aircraft data) is inspired by this project, though the fetch/render code here is a from-scratch, much simpler implementation sized for this panel rather than a port of FlightTracker's own scene framework
+- [feram18/led-stock-ticker](https://github.com/feram18/led-stock-ticker) - the stock screen's layout (market-status bar, company name row, edge-to-edge trend-colored chart) is adapted from this project, also built for a 128x64 panel
