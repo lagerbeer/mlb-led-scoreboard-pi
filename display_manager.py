@@ -246,23 +246,31 @@ class DisplayManager:
     
     def fetch_logo(self, symbol):
         """Fetch company logo"""
-        domain_map = {
-            "AAPL": "apple.com", "GOOGL": "google.com", "MSFT": "microsoft.com",
-            "AMZN": "amazon.com", "TSLA": "tesla.com", "NVDA": "nvidia.com",
-            "META": "meta.com", "NFLX": "netflix.com", "DIS": "disney.com",
-            "UPS": "ups.com"
-        }
-        domain = domain_map.get(symbol, f"{symbol.lower()}.com")
         logo_path = os.path.join(LOGO_DIR, f"{symbol}.png")
-        
+
+        # A cached file only counts if it's actually the size we expect - some
+        # logos in this cache predate LOGO_SIZE being 16x16 (found some at
+        # 32x14), which made draw_logo's getpixel() go out of bounds on every
+        # single draw. Re-fetching a bad cache entry is cheap and self-heals
+        # this instead of silently failing forever.
         if os.path.exists(logo_path):
-            return logo_path
-            
+            try:
+                with Image.open(logo_path) as cached:
+                    if cached.size == LOGO_SIZE:
+                        return logo_path
+            except Exception:
+                pass
+
+        # logo.clearbit.com (the original source here) shut down its free
+        # Logo API after Clearbit's 2023 HubSpot acquisition - the domain
+        # doesn't even resolve anymore, so every fetch was silently failing.
+        # Both of these are keyed by ticker symbol directly, no domain
+        # guessing needed.
         sources = [
-            f"https://logo.clearbit.com/{domain}",
+            f"https://financialmodelingprep.com/image-stock/{symbol}.png",
             f"https://companieslogo.com/img/orig/{symbol}.png"
         ]
-        
+
         for url in sources:
             try:
                 response = requests.get(url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
@@ -285,8 +293,14 @@ class DisplayManager:
             
         try:
             logo = Image.open(logo_path).convert("RGBA")
-            for dx in range(min(LOGO_SIZE[0], 16)):
-                for dy in range(min(LOGO_SIZE[1], 16)):
+            # Bounded by the image's actual size, not just LOGO_SIZE - a
+            # mis-sized cache entry (see fetch_logo) shouldn't be able to
+            # crash this with an out-of-range getpixel().
+            img_w, img_h = logo.size
+            draw_w = min(LOGO_SIZE[0], img_w, 16)
+            draw_h = min(LOGO_SIZE[1], img_h, 16)
+            for dx in range(draw_w):
+                for dy in range(draw_h):
                     canvas_x = x + dx
                     canvas_y = y + dy
                     if 0 <= canvas_x < 128 and 0 <= canvas_y < 64:
@@ -416,37 +430,48 @@ class DisplayManager:
             'prices': prices
         }
     
+    def draw_trend_arrow(self, x, y, up, color):
+        """Small filled 5x5 triangle - up for a gain, down for a loss."""
+        for row in range(5):
+            half = row if up else 4 - row
+            for dx in range(-half, half + 1):
+                self.canvas.SetPixel(x + 2 + dx, y + row, color.red, color.green, color.blue)
+
     def draw_stock(self, stock):
-        """Draw a single stock screen"""
+        """Draw a single stock screen, Yahoo Finance style: logo/symbol/price
+        at top, change with a trend arrow (colored and signed the same way
+        for both the dollar amount and the percent), then a filled area
+        chart in that same trend color."""
         try:
             self.canvas.Fill(0, 0, 0)
-            
-            # Logo
+
             self.draw_logo(2, 2, stock['symbol'])
-            
-            # Symbol
+
             rgbmatrix.graphics.DrawText(self.canvas, self.font_large, 20, 15, self.YELLOW, stock['symbol'])
-            
-            # Price
+
             price = f"${stock['price']:.2f}"
             price_len = len(price) * 10
             rgbmatrix.graphics.DrawText(self.canvas, self.font_clock, 127 - price_len, 15, self.WHITE, price)
-            
-            # Change
+
             change = stock['change']
-            change_color = self.GREEN if change >= 0 else self.RED
-            change_text = f"{'+' if change >= 0 else ''}{change:.2f} ({stock['change_pct']:.2f}%)"
-            rgbmatrix.graphics.DrawText(self.canvas, self.font_small, 20, 30, change_color, change_text)
-            
-            # Chart
+            is_up = change >= 0
+            trend_color = self.GREEN if is_up else self.RED
+            sign = '+' if is_up else ''
+
+            self.draw_trend_arrow(4, 23, is_up, trend_color)
+            change_text = f"{sign}{change:.2f} ({sign}{stock['change_pct']:.2f}%)"
+            rgbmatrix.graphics.DrawText(self.canvas, self.font_small, 14, 30, trend_color, change_text)
+
             if 'prices' in stock and len(stock['prices']) > 1:
-                self.draw_chart(stock['prices'], 10, 40, 108, 20)
-            
-            # Progress bar
+                self.draw_chart(stock['prices'], 4, 36, 120, 18, trend_color)
+
+            # Progress bar sits below the chart now - it used to be drawn at a
+            # fixed y=58 while the chart spanned y=40-60, so it overlapped
+            # the bottom of the chart whenever the price dipped low there.
             progress = (time.time() - self.last_stock_change) / self.config['options']['stock_display_time']
-            bar_width = int(100 * min(1.0, progress))
+            bar_width = int(120 * min(1.0, progress))
             for i in range(bar_width):
-                self.canvas.SetPixel(10 + i, 58, 0, 255, 0)
+                self.canvas.SetPixel(4 + i, 60, 80, 80, 80)
         except Exception as e:
             print(f"⚠️ Stock draw error: {e}")
     
@@ -472,27 +497,47 @@ class DisplayManager:
         
         self.draw_stock(stock)
     
-    def draw_chart(self, prices, x, y, width, height):
-        """Draw a line chart"""
+    def draw_chart(self, prices, x, y, width, height, color):
+        """Draw a line chart with a shaded area underneath, Yahoo Finance
+        style - color is the trend color (green for a gain, red for a loss),
+        with the fill a dimmed version of it."""
         try:
             if len(prices) < 2:
                 return
-            
+
             valid = [p for p in prices if p is not None]
             if len(valid) < 2:
                 return
-            
+
             max_p = max(valid)
             min_p = min(valid)
             if max_p == min_p:
                 max_p += 0.01
-            
-            for i in range(len(valid) - 1):
-                x1 = x + int(i * (width / (len(valid) - 1)))
-                x2 = x + int((i + 1) * (width / (len(valid) - 1)))
-                y1 = y + height - int(((valid[i] - min_p) / (max_p - min_p)) * height)
-                y2 = y + height - int(((valid[i + 1] - min_p) / (max_p - min_p)) * height)
-                rgbmatrix.graphics.DrawLine(self.canvas, x1, y1, x2, y2, self.GREEN)
+
+            points = []
+            for i, p in enumerate(valid):
+                px = x + int(i * (width / (len(valid) - 1)))
+                py = y + height - int(((p - min_p) / (max_p - min_p)) * height)
+                points.append((px, py))
+
+            fill_color = rgbmatrix.graphics.Color(color.red // 4, color.green // 4, color.blue // 4)
+            baseline = y + height
+
+            # Fill: shade every column from the line down to the baseline,
+            # stepping along each segment so the fill has no gaps even on
+            # steep segments.
+            for (x1, y1), (x2, y2) in zip(points, points[1:]):
+                steps = max(abs(x2 - x1), 1)
+                for s in range(steps + 1):
+                    t = s / steps
+                    cx = int(x1 + (x2 - x1) * t)
+                    cy = int(y1 + (y2 - y1) * t)
+                    for fy in range(cy, baseline + 1):
+                        self.canvas.SetPixel(cx, fy, fill_color.red, fill_color.green, fill_color.blue)
+
+            # Line on top of the fill.
+            for (x1, y1), (x2, y2) in zip(points, points[1:]):
+                rgbmatrix.graphics.DrawLine(self.canvas, x1, y1, x2, y2, color)
         except Exception as e:
             print(f"⚠️ Chart draw error: {e}")
     
