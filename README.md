@@ -4,6 +4,15 @@ A Python app that drives a 128x64 RGB LED matrix panel on a Raspberry Pi, rotati
 
 Not affiliated with MLB. Team names, logos, and data are property of MLB Advanced Media / their respective teams; this project just displays publicly available game data for personal use.
 
+## Screenshots
+
+<p align="center">
+  <img src="assets/screenshots/control-panel.png" title="Web control panel" width="49%" />
+  <img src="assets/screenshots/games-page.png" title="Games page" width="49%" />
+</p>
+
+(Web control panel and Games page, shown with placeholder API key/location - not the maintainer's real config.)
+
 ## Features
 
 - **Baseball screen** - full inning-by-inning linescore (runs per inning + R/H/E, team-colored rows), ball/strike/out count, scrolling pitcher name with this game's pitch count, last pitch speed/type or last play (strikeouts get their own color), and a no-hitter/perfect-game announcement (driven by the MLB Stats API's own `noHitter`/`perfectGame` flags) that takes over the play-by-play row while a bid is active. The final screen adds winning/losing/save pitcher. When nothing's live, it scrolls through today's upcoming games instead of sitting on a blank screen. (There's no bases-occupied diamond - a 128px-wide panel doesn't have room for both that and a readable linescore, and the linescore is the more broadcast-standard thing to prioritize.)
