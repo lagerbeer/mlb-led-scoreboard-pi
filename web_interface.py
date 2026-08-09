@@ -26,6 +26,15 @@ TEAMS = sorted(
     key=lambda t: t[1]
 )
 
+# Keys match display_manager.py's CHART_PERIODS - the % change shown on the
+# stock screen is growth/loss over whichever of these is selected, same as
+# picking a range on Yahoo Finance's own chart.
+CHART_PERIODS = [
+    ('1d', '1 Day'), ('5d', '1 Week'), ('1mo', '1 Month'), ('3mo', '3 Months'),
+    ('6mo', '6 Months'), ('ytd', 'Year to Date'), ('1y', '1 Year'),
+    ('2y', '2 Years'), ('5y', '5 Years'), ('10y', '10 Years'), ('max', 'All')
+]
+
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -435,6 +444,15 @@ HTML_TEMPLATE = '''
                     <div class="form-group">
                         <label>Time per Stock (seconds):</label>
                         <input type="number" name="stock_display_time" value="{{ config.options.stock_display_time }}" min="2" max="15">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Chart Period (the % shown is growth/loss over this period):</label>
+                        <select name="chart_period">
+                            {% for value, label in chart_periods %}
+                            <option value="{{ value }}" {% if config.options.get('chart_period', '1d') == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
                     </div>
 
                     <button type="submit">Update Stocks</button>
@@ -880,7 +898,8 @@ def index():
         service_status=get_service_status(),
         mode=mode_data['mode'],
         current_screen=mode_data.get('screen', 'weather'),
-        teams=TEAMS
+        teams=TEAMS,
+        chart_periods=CHART_PERIODS
     )
 
 @app.route('/set_manual', methods=['POST'])
@@ -926,6 +945,7 @@ def update_stocks():
     stocks = request.form.getlist('stocks[]')
     config['tickers']['stocks'] = [s.upper().strip() for s in stocks if s.strip()]
     config['options']['stock_display_time'] = int(request.form['stock_display_time'])
+    config['options']['chart_period'] = request.form['chart_period']
 
     save_config(config)
     trigger_reload()

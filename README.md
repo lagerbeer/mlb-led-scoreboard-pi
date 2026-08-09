@@ -10,7 +10,7 @@ Not affiliated with MLB. Team names, logos, and data are property of MLB Advance
 - **Standings screen** - shows the division standings for whichever team you've set as preferred, with that team's row highlighted in its own team color.
 - **Flight tracker screen** - three big centered rows (route, callsign, aircraft type) for whatever's currently overhead within a configurable radius of home, styled after the reference project's own display rather than cramming in every telemetry field at once. Uses the unofficial FlightRadar24 API - no account or hardware receiver needed. (Approach inspired by [ColinWaddell/FlightTracker](https://github.com/ColinWaddell/FlightTracker) - see Credits.)
 - **Weather screen** - current temp/humidity/clock via OpenWeatherMap (optional; falls back to manually-set values if no API key is configured).
-- **Stock ticker** - rotates through a configurable list of symbols, Yahoo-Finance-styled: company logo, name, and a market-open/closed status bar up top, price and signed change/percent with a trend arrow, and a filled area chart colored to match the day's trend (Yahoo Finance's own chart endpoint, no API key needed). Layout adapted from [feram18/led-stock-ticker](https://github.com/feram18/led-stock-ticker) - see Credits.
+- **Stock ticker** - rotates through a configurable list of symbols, Yahoo-Finance-styled: company logo, name, and a market-open/closed status bar up top, price and signed change/percent with a trend arrow, and a filled area chart colored to match the period's trend (Yahoo Finance's own chart endpoint, no API key needed). Layout adapted from [feram18/led-stock-ticker](https://github.com/feram18/led-stock-ticker) - see Credits. Chart period (1 Day through All) is configurable in the web UI - the change/% shown always reflects growth or loss over whichever period is selected, same as picking a range on Yahoo Finance's own chart.
 - **Web control panel** (`:5000`) - edit weather/stock/baseball/display settings, pick your preferred team, and manually pin the display to one specific screen.
 - **Games page** (`:5000/games`) - browse every game scheduled today (live, upcoming, or final) and push any one of them to the matrix on demand.
 
@@ -85,6 +85,7 @@ Edit `config.json`:
 | `display.brightness` | 0-100 |
 | `options.rotation_rate` | Seconds each top-level screen (weather/stocks/baseball/standings/flights) stays up before rotating to the next |
 | `options.stock_display_time` | Seconds per stock symbol within the stocks screen |
+| `options.chart_period` | Yahoo chart range the stock screen fetches - `1d`, `5d`, `1mo`, `3mo`, `6mo`, `ytd`, `1y`, `2y`, `5y`, `10y`, or `max`. The change/% shown is growth or loss over this whole period, not just the day's move. Easiest set via the web UI's Chart Period dropdown rather than by hand. |
 | `options.baseball_display_time` | Seconds per game within the baseball screen's own rotation |
 | `options.flight_display_time` | Seconds per aircraft within the flight screen's own rotation |
 | `options.preferred_team` | MLB team abbreviation (e.g. `SF`) - this team's live game takes priority, and drives which division shows on the standings screen |
@@ -95,7 +96,7 @@ Edit `config.json`:
 
 `config.json` is gitignored since it holds your API key - everything else in the repo is safe to commit.
 
-`options.stock_api_key`, `options.currency`, `options.date_format`, `options.show_logos`, and `options.chart_period` exist in the config file for historical reasons but aren't currently read by any code - safe to ignore.
+`options.stock_api_key`, `options.currency`, `options.date_format`, and `options.show_logos` exist in the config file for historical reasons but aren't currently read by any code - safe to ignore.
 
 The flight screen uses the unofficial FlightRadar24 API (via the `FlightRadarAPI` package), which rate-limits (returns empty results) if polled too often. `display_manager.py` caches flight data for 60 seconds for this reason - don't lower that interval without a good reason.
 

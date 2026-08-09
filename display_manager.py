@@ -437,16 +437,52 @@ class DisplayManager:
     # feram18/led-stock-ticker, a similar RGB-matrix stock ticker project.
     NAME_SUFFIXES = ['Company', 'Corporation', 'Holdings', 'Incorporated', 'Inc', '.com', '(The)']
 
+    # Yahoo's chart endpoint needs an explicit interval for anything beyond
+    # ~8 days of range - without one it 422s past 5d (verified against the
+    # real API: 1m granularity is only allowed for 8 days). Each entry is
+    # (range, interval, short display label) keyed by the same range string
+    # stored in config - these are the periods Yahoo Finance's own UI offers.
+    CHART_PERIODS = {
+        '1d':  ('1d',  '2m',  '1D'),
+        '5d':  ('5d',  '15m', '1W'),
+        '1mo': ('1mo', '1d',  '1M'),
+        '3mo': ('3mo', '1d',  '3M'),
+        '6mo': ('6mo', '1d',  '6M'),
+        'ytd': ('ytd', '1d',  'YTD'),
+        '1y':  ('1y',  '1d',  '1Y'),
+        '2y':  ('2y',  '1wk', '2Y'),
+        '5y':  ('5y',  '1wk', '5Y'),
+        '10y': ('10y', '1mo', '10Y'),
+        'max': ('max', '1mo', 'All'),
+    }
+
     def _clean_company_name(self, name):
         for suffix in self.NAME_SUFFIXES:
             name = name.replace(suffix, '')
         return name.rstrip('& .,').rstrip()
 
+    def _downsample(self, values, max_points=30):
+        """The chart line only needs ~30 points to look smooth on a 120px-wide
+        panel - a 5y/1wk fetch alone can return 250+, and this gets redrawn
+        every ~100ms display frame, so trimming it down matters for
+        performance, not just tidiness."""
+        if len(values) <= max_points:
+            return values
+        step = len(values) / max_points
+        return [values[int(i * step)] for i in range(max_points)]
+
     def get_stock_data(self, symbol):
-        """Get stock data from Yahoo Finance"""
+        """Get stock data from Yahoo Finance for the configured chart period.
+        Change/% change reflect growth over that whole period (last price vs
+        the period's first price), not just today's move - so switching the
+        period in the web UI actually changes what the numbers mean, same as
+        picking a range on Yahoo Finance's own chart."""
+        period_key = self.config.get('options', {}).get('chart_period', '1d')
+        yahoo_range, interval, period_label = self.CHART_PERIODS.get(period_key, self.CHART_PERIODS['1d'])
+
         try:
             headers = {'User-Agent': 'Mozilla/5.0'}
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={yahoo_range}&interval={interval}"
             response = requests.get(url, timeout=10, headers=headers)
 
             if response.status_code == 200:
@@ -455,9 +491,14 @@ class DisplayManager:
                     result = data['chart']['result'][0]
                     meta = result.get('meta', {})
                     price = meta.get('regularMarketPrice', 0)
-                    prev_close = meta.get('previousClose', price)
-                    change = price - prev_close
-                    change_pct = (change / prev_close * 100) if prev_close > 0 else 0
+
+                    indicators = result.get('indicators', {})
+                    quote = indicators.get('quote', [{}])[0]
+                    closes = [p for p in quote.get('close', []) if p is not None]
+
+                    period_start = closes[0] if closes else price
+                    change = price - period_start
+                    change_pct = (change / period_start * 100) if period_start > 0 else 0
 
                     name = meta.get('longName') or meta.get('shortName') or symbol
                     name = self._clean_company_name(name)
@@ -471,12 +512,6 @@ class DisplayManager:
                     except (KeyError, TypeError):
                         pass
 
-                    # Get chart data
-                    indicators = result.get('indicators', {})
-                    quote = indicators.get('quote', [{}])[0]
-                    closes = quote.get('close', [])
-                    prices = [p for p in closes if p is not None][-20:]
-
                     return {
                         'symbol': symbol,
                         'name': name,
@@ -484,7 +519,8 @@ class DisplayManager:
                         'price': round(price, 2),
                         'change': round(change, 2),
                         'change_pct': round(change_pct, 2),
-                        'prices': prices
+                        'period_label': period_label,
+                        'prices': self._downsample(closes)
                     }
         except Exception as e:
             print(f"⚠️ Stock fetch error for {symbol}: {e}")
@@ -499,6 +535,7 @@ class DisplayManager:
             'price': base,
             'change': base * 0.01,
             'change_pct': 1.0,
+            'period_label': period_label,
             'prices': prices
         }
     
@@ -542,8 +579,13 @@ class DisplayManager:
             sign = '+' if is_up else ''
 
             self.draw_trend_arrow(4, 29, is_up, trend_color)
-            change_text = f"{sign}{change:.2f} ({sign}{stock['change_pct']:.2f}%)"
-            rgbmatrix.graphics.DrawText(self.canvas, self.font_small, 14, 36, trend_color, change_text)
+            # Prefixed with the period the change is over (1D/1M/1Y/etc) -
+            # without it, a change/% pair with no time context "makes no
+            # sense" on its own. Scrolls if a period label + wide dollar
+            # amount ever don't fit (e.g. "10Y: +1234.56 (+312.45%)").
+            period_label = stock.get('period_label', '1D')
+            change_text = f"{period_label}: {sign}{change:.2f} ({sign}{stock['change_pct']:.2f}%)"
+            self.draw_scrolling_text('stock_change', self.font_small, 14, 36, 112, trend_color, change_text)
 
             if 'prices' in stock and len(stock['prices']) > 1:
                 self.draw_chart(stock['prices'], 4, 42, 120, 19, trend_color)
