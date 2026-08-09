@@ -63,9 +63,17 @@ class DisplayManager:
             self.font_clock = rgbmatrix.graphics.Font()
             self.font_clock.LoadFont("/home/pi/mlb_scoreboard/10x20.bdf")
             
+            # 5x7.bdf (the font this used to load) has no glyphs at all for
+            # ":+-.()%$" - CharacterWidth returns -1 (not found) for every one
+            # of them, confirmed by direct test. That's every punctuation
+            # character the stock screen's change/price text needs, which is
+            # why it rendered as bare digit groups with no signs, decimals,
+            # or percent sign. fonts/5x8.bdf (already used by BaseballRenderer/
+            # StandingsRenderer/FlightScreenRenderer for the same reason -
+            # 5x7 also has zero lowercase glyphs) has full coverage for both.
             self.font_small = rgbmatrix.graphics.Font()
             try:
-                self.font_small.LoadFont("/home/pi/mlb_scoreboard/5x7.bdf")
+                self.font_small.LoadFont("/home/pi/mlb_scoreboard/fonts/5x8.bdf")
             except:
                 self.font_small = self.font_large
 
