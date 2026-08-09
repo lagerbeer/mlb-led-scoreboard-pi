@@ -5,6 +5,7 @@ Modern Display Manager - With Better Error Handling
 
 import time
 import json
+import math
 import os
 import sys
 import requests
@@ -85,6 +86,9 @@ class DisplayManager:
             self.WHITE = rgbmatrix.graphics.Color(255, 255, 255)
             self.GRAY = rgbmatrix.graphics.Color(100, 100, 100)
             self.ORANGE = rgbmatrix.graphics.Color(255, 165, 0)
+            self.BLUE = rgbmatrix.graphics.Color(80, 150, 255)
+            self.LIGHT_GRAY = rgbmatrix.graphics.Color(180, 180, 190)
+            self.DARK_GRAY = rgbmatrix.graphics.Color(70, 70, 80)
             
             # Create logo directory
             os.makedirs(LOGO_DIR, exist_ok=True)
@@ -365,6 +369,28 @@ class DisplayManager:
                 break
 
     # === WEATHER FUNCTIONS ===
+    def _weather_category(self, icon_code):
+        """Maps an OpenWeatherMap icon code (e.g. "04d", "10n") to one of our
+        own animated-icon categories. The d/n suffix is OWM's own day/night
+        flag - simpler than computing it from sunrise/sunset ourselves."""
+        if not icon_code:
+            return 'clear-day'
+        code = icon_code[:2]
+        is_night = icon_code.endswith('n')
+        if code == '01':
+            return 'clear-night' if is_night else 'clear-day'
+        if code in ('02', '03', '04'):
+            return 'cloudy'
+        if code in ('09', '10'):
+            return 'rain'
+        if code == '11':
+            return 'thunderstorm'
+        if code == '13':
+            return 'snow'
+        if code == '50':
+            return 'fog'
+        return 'clear-day'
+
     def get_weather(self):
         """Get weather data"""
         weather_config = self.config.get('weather', {})
@@ -372,73 +398,179 @@ class DisplayManager:
         location = weather_config.get('location', 'Chicago,us')
         metric = weather_config.get('metric_units', True)
         city = location.split(',')[0].strip().capitalize()
-        
+        unit = '°C' if metric else '°F'
+
         if not api_key:
             temp = weather_config.get('temp', '72')
             humidity = weather_config.get('humidity', '45')
-            unit = '°C' if metric else '°F'
-            return {'city': city, 'temp': str(temp) + unit, 'humidity': str(humidity) + '%', 'icon': 'sunny'}
-        
+            return {
+                'city': city, 'temp': f'{temp}{unit}', 'feels_like': f'{temp}{unit}',
+                'humidity': f'{humidity}%', 'condition': 'Clear', 'category': 'clear-day'
+            }
+
         try:
             units = 'metric' if metric else 'imperial'
             url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={api_key}&units={units}"
             response = requests.get(url, timeout=5)
             data = response.json()
-            
+
             if response.status_code == 200:
                 temp = round(data['main']['temp'])
+                feels_like = round(data['main'].get('feels_like', temp))
                 humidity = data['main']['humidity']
-                condition = data['weather'][0]['main'].lower()
-                icon = 'sunny' if 'clear' in condition else 'cloudy' if 'cloud' in condition else 'rain'
+                weather_info = data.get('weather', [{}])[0]
                 return {
                     'city': city,
-                    'temp': str(temp) + ('°C' if metric else '°F'),
-                    'humidity': str(humidity) + '%',
-                    'icon': icon
+                    'temp': f'{temp}{unit}',
+                    'feels_like': f'{feels_like}{unit}',
+                    'humidity': f'{humidity}%',
+                    'condition': weather_info.get('main', 'Clear'),
+                    'category': self._weather_category(weather_info.get('icon', ''))
                 }
         except Exception as e:
             print(f"⚠️ Weather fetch error: {e}")
-        
+
         temp = weather_config.get('temp', '72')
         humidity = weather_config.get('humidity', '45')
-        unit = '°C' if metric else '°F'
-        return {'city': city, 'temp': str(temp) + unit, 'humidity': str(humidity) + '%', 'icon': 'sunny'}
-    
+        return {
+            'city': city, 'temp': f'{temp}{unit}', 'feels_like': f'{temp}{unit}',
+            'humidity': f'{humidity}%', 'condition': 'Clear', 'category': 'clear-day'
+        }
+
+    # --- Animated weather icons ---
+    # Each shape is redrawn every frame (~10fps, driven by the main loop's
+    # sleep(0.1)) with its animation phase computed fresh from time.time(),
+    # rather than tracked as separate state - draw_weather() already only
+    # refreshes the underlying DATA every 5 minutes via weather_cache, so this
+    # naturally gives smooth continuous motion without extra bookkeeping.
+    def _fill_circle(self, cx, cy, r, color):
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                if dx * dx + dy * dy <= r * r:
+                    x, y = cx + dx, cy + dy
+                    if 0 <= x < 128 and 0 <= y < 64:
+                        self.canvas.SetPixel(x, y, color.red, color.green, color.blue)
+
+    def _draw_sun(self, cx, cy, color):
+        self._fill_circle(cx, cy, 9, color)
+        phase = time.time() * 0.6
+        for i in range(8):
+            angle = phase + i * (math.pi / 4)
+            x1 = cx + int(11 * math.cos(angle))
+            y1 = cy + int(11 * math.sin(angle))
+            x2 = cx + int(15 * math.cos(angle))
+            y2 = cy + int(15 * math.sin(angle))
+            rgbmatrix.graphics.DrawLine(self.canvas, x1, y1, x2, y2, color)
+
+    def _draw_moon(self, cx, cy, color):
+        r = 10
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                # Crescent: full disc minus an offset disc cut out of it.
+                if dx * dx + dy * dy <= r * r and (dx - 4) * (dx - 4) + dy * dy > (r - 1) * (r - 1):
+                    x, y = cx + dx, cy + dy
+                    if 0 <= x < 128 and 0 <= y < 64:
+                        self.canvas.SetPixel(x, y, color.red, color.green, color.blue)
+        t = int(time.time() * 2)
+        for i, (sx, sy) in enumerate([(cx + 16, cy - 10), (cx - 14, cy + 8), (cx + 12, cy + 12)]):
+            if (t + i * 2) % 4 < 3 and 0 <= sx < 128 and 0 <= sy < 64:
+                self.canvas.SetPixel(sx, sy, 255, 255, 255)
+
+    def _draw_cloud(self, cx, cy, color):
+        """Drifts a couple pixels side to side. Returns the drifted center x
+        so rain/snow can align their falling drops/flakes under it."""
+        drift = int(2 * math.sin(time.time() * 0.6))
+        cx += drift
+        for ox, oy, r in [(-7, 3, 6), (0, -2, 8), (8, 3, 6)]:
+            self._fill_circle(cx + ox, cy + oy, r, color)
+        return cx
+
+    def _draw_rain(self, cx, cy, cloud_color, drop_color):
+        cloud_cx = self._draw_cloud(cx, cy - 6, cloud_color)
+        t = time.time()
+        for i in range(5):
+            dx = -10 + i * 5
+            fall = (t * 24 + i * 6) % 18
+            y1 = cy + 2 + int(fall)
+            y2 = y1 + 4
+            if y1 < cy + 18:
+                rgbmatrix.graphics.DrawLine(self.canvas, cloud_cx + dx, y1, cloud_cx + dx - 1, y2, drop_color)
+
+    def _draw_thunderstorm(self, cx, cy, cloud_color, drop_color, bolt_color):
+        self._draw_rain(cx, cy, cloud_color, drop_color)
+        # Flash a bolt for a brief burst every few seconds rather than a
+        # continuous flicker, which would be too busy on a small panel.
+        if (time.time() % 3) < 0.3:
+            bx, by = cx - 2, cy + 4
+            rgbmatrix.graphics.DrawLine(self.canvas, bx, by, bx - 3, by + 5, bolt_color)
+            rgbmatrix.graphics.DrawLine(self.canvas, bx - 3, by + 5, bx + 1, by + 5, bolt_color)
+            rgbmatrix.graphics.DrawLine(self.canvas, bx + 1, by + 5, bx - 2, by + 12, bolt_color)
+
+    def _draw_snow(self, cx, cy, cloud_color, flake_color):
+        cloud_cx = self._draw_cloud(cx, cy - 6, cloud_color)
+        t = time.time()
+        for i in range(6):
+            dx = -10 + i * 4
+            fall = (t * 10 + i * 5) % 18
+            wobble = int(2 * math.sin(t * 3 + i))
+            x, y = cloud_cx + dx + wobble, cy + 2 + int(fall)
+            if y < cy + 18 and 0 <= x < 128 and 0 <= y < 64:
+                self.canvas.SetPixel(x, y, flake_color.red, flake_color.green, flake_color.blue)
+
+    def _draw_fog(self, cx, cy, color):
+        t = time.time()
+        for row in range(4):
+            y = cy - 9 + row * 6
+            x_start = cx - 14 + int(4 * math.sin(t * 0.8 + row))
+            rgbmatrix.graphics.DrawLine(self.canvas, x_start, y, x_start + 22, y, color)
+
+    def draw_weather_icon(self, category, cx, cy):
+        if category == 'clear-night':
+            self._draw_moon(cx, cy, self.WHITE)
+        elif category == 'cloudy':
+            self._draw_cloud(cx, cy, self.LIGHT_GRAY)
+        elif category == 'rain':
+            self._draw_rain(cx, cy, self.GRAY, self.BLUE)
+        elif category == 'thunderstorm':
+            self._draw_thunderstorm(cx, cy, self.DARK_GRAY, self.BLUE, self.YELLOW)
+        elif category == 'snow':
+            self._draw_snow(cx, cy, self.GRAY, self.WHITE)
+        elif category == 'fog':
+            self._draw_fog(cx, cy, self.LIGHT_GRAY)
+        else:
+            self._draw_sun(cx, cy, self.YELLOW)
+
     def draw_weather(self):
-        """Draw weather screen"""
+        """Draw weather screen: an animated icon for the current condition,
+        temperature, condition text, feels-like + humidity, and city/time."""
         try:
             self.canvas.Fill(0, 0, 0)
-            
+
             if not self.weather_cache or time.time() - self.weather_cache_time > 300:
                 self.weather_cache = self.get_weather()
                 self.weather_cache_time = time.time()
-            
+
             weather = self.weather_cache
-            
-            # Temperature
-            rgbmatrix.graphics.DrawText(self.canvas, self.font_large, 0, 13, self.YELLOW, weather['temp'])
-            
-            # Simple weather icon
-            for i in range(5):
-                for j in range(5):
-                    self.canvas.SetPixel(59 + j, 4 + i, 255, 255, 0)
-            
-            # Humidity
-            hum_len = len(weather['humidity']) * 7
-            rgbmatrix.graphics.DrawText(self.canvas, self.font_large, 127 - hum_len, 13, self.YELLOW, weather['humidity'])
-            
-            # Clock
-            clock = datetime.now().strftime("%H:%M:%S")
-            clock_x = (128 - (len(clock) * 10)) // 2
-            rgbmatrix.graphics.DrawText(self.canvas, self.font_clock, clock_x, 32, self.TEAL, clock)
-            
-            # City
+
+            self.draw_weather_icon(weather.get('category', 'clear-day'), 22, 22)
+
+            rgbmatrix.graphics.DrawText(self.canvas, self.font_clock, 50, 28, self.WHITE, weather['temp'])
+            rgbmatrix.graphics.DrawText(self.canvas, self.font_small, 50, 38, self.YELLOW, weather.get('condition', ''))
+
+            detail = f"Feels {weather.get('feels_like', weather['temp'])}  Hum {weather['humidity']}"
+            rgbmatrix.graphics.DrawText(self.canvas, self.font_small, 4, 50, self.GRAY, detail)
+
+            clock = datetime.now().strftime("%I:%M %p").lstrip('0')
+            clock_width = self.text_width(self.font_small, clock)
+            rgbmatrix.graphics.DrawText(self.canvas, self.font_small, 126 - clock_width, 8, self.TEAL, clock)
+
             city = weather['city'][:15]
             city_x = (128 - (len(city) * 7)) // 2
-            rgbmatrix.graphics.DrawText(self.canvas, self.font_large, city_x, 63, self.GREEN, city)
+            rgbmatrix.graphics.DrawText(self.canvas, self.font_large, city_x, 62, self.GREEN, city)
         except Exception as e:
             print(f"⚠️ Weather draw error: {e}")
-    
+
+
     # === STOCK FUNCTIONS ===
     # Trimmed off the end of a company's long name for a cleaner fit on a
     # small display ("Apple Inc." -> "Apple") - same suffix list used by
