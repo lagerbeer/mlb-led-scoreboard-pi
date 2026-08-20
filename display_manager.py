@@ -26,6 +26,9 @@ from baseball_complete import BaseballRenderer
 from standings_screen import StandingsRenderer
 from flight_tracker import flight_fetcher
 from flight_screen import FlightScreenRenderer
+from nfl_integration import nfl_fetcher
+from football_screen import FootballRenderer
+from ncaaf_integration import ncaaf_fetcher
 
 # Configuration file
 CONFIG_FILE = '/home/pi/mlb_scoreboard_pro/config.json'
@@ -104,6 +107,8 @@ class DisplayManager:
                 "baseball": self.draw_baseball,
                 "standings": self.draw_standings,
                 "flights": self.draw_flights,
+                "football": self.draw_football,
+                "ncaaf": self.draw_ncaaf,
             }
             self.modes = list(self.screens.keys())
             self.current_mode_index = 0
@@ -166,7 +171,35 @@ class DisplayManager:
             self.last_flight_update = 0
             self.last_flight_change = time.time()
             self.flight_renderer = FlightScreenRenderer()
-            
+
+            # Football state - refreshed every 30s (faster than baseball's 60s,
+            # since a live NFL play clock/down-and-distance moves quickly and
+            # there's no per-pitch detail call to worry about rate-limiting).
+            self.football_index = 0
+            self.football_cache = []
+            self.last_football_update = 0
+            self.last_football_change = time.time()
+            self.football_renderer = FootballRenderer()
+
+            # Manually-selected single game (from the Football web page) - same
+            # pattern as selected_game_cache above, separate since it tracks an
+            # ESPN event id rather than an MLB gamePk.
+            self.selected_football_cache = None
+            self.last_selected_football_update = 0
+
+            # NCAA football state - same shape as the NFL state above. Reuses
+            # FootballRenderer (identical game-dict shape) but with its own
+            # instance and logo cache directory, so an NFL/college team-code
+            # collision (e.g. both using "MIA") can never cross-contaminate
+            # the two screens' cached logos.
+            self.ncaaf_index = 0
+            self.ncaaf_cache = []
+            self.last_ncaaf_update = 0
+            self.last_ncaaf_change = time.time()
+            self.ncaaf_renderer = FootballRenderer(logo_dir='/home/pi/mlb_scoreboard/assets/ncaaf_logos')
+            self.selected_ncaaf_cache = None
+            self.last_selected_ncaaf_update = 0
+
             # Clear screen on startup
             self.canvas.Fill(0, 0, 0)
             self.canvas = self.matrix.SwapOnVSync(self.canvas)
@@ -906,6 +939,99 @@ class DisplayManager:
             self.flight_renderer.render(flight, index=self.flight_index, total=len(self.flight_cache))
         except Exception as e:
             print(f"⚠️ Flight draw error: {e}")
+
+    # === FOOTBALL FUNCTIONS ===
+    def draw_football(self):
+        """Draw football screen with internal rotation"""
+        try:
+            # A specific game picked on the Football web page overrides the usual
+            # live/upcoming rotation entirely - refreshed every 15s (faster than
+            # the 30s auto-rotation cache), same pattern as draw_baseball's
+            # manual-game override.
+            if self.manual_mode and self.manual_screen == 'football' and self.manual_game_id:
+                if not self.selected_football_cache or time.time() - self.last_selected_football_update > 15:
+                    self.selected_football_cache = nfl_fetcher.get_game_by_id(self.manual_game_id)
+                    self.last_selected_football_update = time.time()
+
+                if not self.selected_football_cache:
+                    self.canvas.Fill(0, 0, 0)
+                    rgbmatrix.graphics.DrawText(self.canvas, self.font_large, 8, 32, self.RED, "Game Not Found")
+                    return
+
+                self.football_renderer.canvas = self.canvas
+                self.football_renderer.render_game(self.selected_football_cache)
+                return
+
+            # Update games list periodically - always replace the cache (even with an
+            # empty list) so a game ending clears it instead of leaving stale data on screen.
+            if time.time() - self.last_football_update > 30:
+                games = nfl_fetcher.get_games_for_display()
+                self.football_cache = games
+                print(f"🏈 Loaded {len(games)} NFL game(s) for display")
+                self.last_football_update = time.time()
+
+            if not self.football_cache:
+                self.canvas.Fill(0, 0, 0)
+                rgbmatrix.graphics.DrawText(self.canvas, self.font_large, 10, 32, self.RED, "No NFL Games")
+                return
+
+            self.football_index = self.football_index % len(self.football_cache)
+
+            football_display_time = self.config.get('options', {}).get('football_display_time', 8)
+            if time.time() - self.last_football_change >= football_display_time:
+                self.football_index = (self.football_index + 1) % len(self.football_cache)
+                self.last_football_change = time.time()
+
+            game = self.football_cache[self.football_index]
+
+            self.football_renderer.canvas = self.canvas
+            self.football_renderer.render_game(game)
+        except Exception as e:
+            print(f"⚠️ Football draw error: {e}")
+
+    # === NCAA FOOTBALL FUNCTIONS ===
+    def draw_ncaaf(self):
+        """Draw NCAA football screen with internal rotation - same structure
+        as draw_football(), just backed by ncaaf_fetcher/self.ncaaf_renderer."""
+        try:
+            if self.manual_mode and self.manual_screen == 'ncaaf' and self.manual_game_id:
+                if not self.selected_ncaaf_cache or time.time() - self.last_selected_ncaaf_update > 15:
+                    self.selected_ncaaf_cache = ncaaf_fetcher.get_game_by_id(self.manual_game_id)
+                    self.last_selected_ncaaf_update = time.time()
+
+                if not self.selected_ncaaf_cache:
+                    self.canvas.Fill(0, 0, 0)
+                    rgbmatrix.graphics.DrawText(self.canvas, self.font_large, 8, 32, self.RED, "Game Not Found")
+                    return
+
+                self.ncaaf_renderer.canvas = self.canvas
+                self.ncaaf_renderer.render_game(self.selected_ncaaf_cache)
+                return
+
+            if time.time() - self.last_ncaaf_update > 30:
+                games = ncaaf_fetcher.get_games_for_display()
+                self.ncaaf_cache = games
+                print(f"🎓 Loaded {len(games)} NCAAF game(s) for display")
+                self.last_ncaaf_update = time.time()
+
+            if not self.ncaaf_cache:
+                self.canvas.Fill(0, 0, 0)
+                rgbmatrix.graphics.DrawText(self.canvas, self.font_large, 4, 32, self.RED, "No NCAAF Games")
+                return
+
+            self.ncaaf_index = self.ncaaf_index % len(self.ncaaf_cache)
+
+            ncaaf_display_time = self.config.get('options', {}).get('ncaaf_display_time', 8)
+            if time.time() - self.last_ncaaf_change >= ncaaf_display_time:
+                self.ncaaf_index = (self.ncaaf_index + 1) % len(self.ncaaf_cache)
+                self.last_ncaaf_change = time.time()
+
+            game = self.ncaaf_cache[self.ncaaf_index]
+
+            self.ncaaf_renderer.canvas = self.canvas
+            self.ncaaf_renderer.render_game(game)
+        except Exception as e:
+            print(f"⚠️ NCAAF draw error: {e}")
 
     def run(self):
         """Main display loop"""

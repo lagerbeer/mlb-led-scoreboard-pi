@@ -4,6 +4,7 @@ MLB Baseball Integration - Prioritizes Giants games
 """
 
 import statsapi
+import requests
 import json
 from datetime import datetime
 import logging
@@ -99,6 +100,28 @@ TEAM_NAME_TO_CODE = {
     "Texas Rangers": "TEX", "Toronto Blue Jays": "TOR", "Washington Nationals": "WSH",
 }
 
+# ESPN's public (undocumented) standings endpoint - same source used by
+# nfl_integration.get_standings(). It groups teams by league (AL/NL) but not
+# by division, so - same as NFL_DIVISIONS in nfl_integration.py - division
+# membership is a static mapping here.
+MLB_STANDINGS_URL = 'https://site.api.espn.com/apis/v2/sports/baseball/mlb/standings'
+
+MLB_DIVISIONS = {
+    "AL East": ["BAL", "BOS", "NYY", "TB", "TOR"],
+    "AL Central": ["CWS", "CLE", "DET", "KC", "MIN"],
+    "AL West": ["HOU", "LAA", "ATH", "SEA", "TEX"],
+    "NL East": ["ATL", "MIA", "NYM", "PHI", "WSH"],
+    "NL Central": ["CHC", "CIN", "MIL", "PIT", "STL"],
+    "NL West": ["AZ", "COL", "LAD", "SD", "SF"],
+}
+
+# ESPN's abbreviations differ from this codebase's convention (TEAM_NAME_TO_CODE
+# above, also used by the preferred-team dropdown) for exactly these two teams -
+# normalized when building get_full_standings()'s by-code lookup so MLB_DIVISIONS
+# membership and the preferred-team highlight both resolve correctly.
+ESPN_CODE_OVERRIDES = {"ARI": "AZ", "CHW": "CWS"}
+
+
 class MLBDataFetcher:
     def __init__(self, preferred_code="SF"):
         self.cache = {}
@@ -147,7 +170,7 @@ class MLBDataFetcher:
                     game_status = 'live'
                 elif 'Postponed' in status_text:
                     game_status = 'postponed'
-                elif 'Scheduled' in status_text or 'Preview' in status_text:
+                elif any(s in status_text for s in ('Scheduled', 'Pre-Game', 'Warmup', 'Preview', 'Delayed Start')):
                     game_status = 'pregame'
                 else:
                     game_status = 'unknown'
@@ -465,6 +488,51 @@ class MLBDataFetcher:
         except Exception as e:
             print(f"⚠️ Error fetching standings: {e}")
             return None
+
+    def get_full_standings(self):
+        """Full MLB standings for all 30 teams, grouped into the 6 standard
+        divisions (see MLB_DIVISIONS) with each division's teams sorted by win
+        percentage - for the web control panel's Games page, which shows the
+        whole league rather than just the preferred team's division (that's
+        what get_standings_for_display() above is for, used by the LED
+        standings screen). Sourced from ESPN rather than the MLB Stats API,
+        matching nfl_integration.get_standings()'s approach - ESPN's endpoint
+        happens to be the more convenient source for a full-league view.
+        Hits the API fresh on every call - like get_today_games(), caching is
+        the caller's job."""
+        try:
+            response = requests.get(MLB_STANDINGS_URL, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+            if response.status_code != 200:
+                print(f"⚠️ MLB standings fetch returned {response.status_code}")
+                return {}
+            data = response.json()
+        except Exception as e:
+            print(f"❌ Error fetching full MLB standings: {e}")
+            return {}
+
+        by_code = {}
+        for league in data.get('children', []):
+            for entry in league.get('standings', {}).get('entries', []):
+                team = entry.get('team', {})
+                code = team.get('abbreviation', '')
+                code = ESPN_CODE_OVERRIDES.get(code, code)
+                stats = {s['name']: s.get('displayValue', '') for s in entry.get('stats', [])}
+                by_code[code] = {
+                    'code': code,
+                    'wins': stats.get('wins', '0'),
+                    'losses': stats.get('losses', '0'),
+                    'pct': stats.get('winPercent', '.000'),
+                    'gb': stats.get('divisionGamesBehind', '-'),
+                    'streak': stats.get('streak', '')
+                }
+
+        divisions = {}
+        for division_name, codes in MLB_DIVISIONS.items():
+            teams = [by_code[c] for c in codes if c in by_code]
+            teams.sort(key=lambda t: float(t['pct'] or 0), reverse=True)
+            divisions[division_name] = teams
+
+        return divisions
 
 # Global instance
 mlb_fetcher = MLBDataFetcher("SF")  # Fallback if config.json has no preferred_team set

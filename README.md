@@ -1,6 +1,6 @@
 # MLB LED Scoreboard (Pro)
 
-A Python app that drives a 128x64 RGB LED matrix panel on a Raspberry Pi, rotating between a live/upcoming MLB game, division standings, nearby aircraft, weather, and a stock ticker - with a Flask web control panel for configuration and manual screen control.
+A Python app that drives a 128x64 RGB LED matrix panel on a Raspberry Pi, rotating between a live/upcoming MLB game, division standings, live NFL and NCAA football, nearby aircraft, weather, and a stock ticker - with a Flask web control panel for configuration and manual screen control.
 
 Not affiliated with MLB. Team names, logos, and data are property of MLB Advanced Media / their respective teams; this project just displays publicly available game data for personal use.
 
@@ -17,11 +17,15 @@ Not affiliated with MLB. Team names, logos, and data are property of MLB Advance
 
 - **Baseball screen** - full inning-by-inning linescore (runs per inning + R/H/E, team-colored rows), ball/strike/out count, scrolling pitcher name with this game's pitch count, last pitch speed/type or last play (strikeouts get their own color), and a no-hitter/perfect-game announcement (driven by the MLB Stats API's own `noHitter`/`perfectGame` flags) that takes over the play-by-play row while a bid is active. The final screen adds winning/losing/save pitcher. When nothing's live, it scrolls through today's upcoming games instead of sitting on a blank screen. (There's no bases-occupied diamond - a 128px-wide panel doesn't have room for both that and a readable linescore, and the linescore is the more broadcast-standard thing to prioritize.)
 - **Standings screen** - shows the division standings for whichever team you've set as preferred, with that team's row highlighted in its own team color.
+- **Football screen** - live/upcoming/final NFL games via ESPN's public scoreboard API (no key needed): each team's real logo and current score with a background in that team's real color, a possession marker next to whichever team has the ball, timeouts remaining (3 pip markers per team), down-and-distance (highlighted when in the red zone), and ESPN's own status text (quarter/clock, "Halftime", "Final", or kickoff time for games that haven't started). Prioritizes your preferred team's live game the same way the baseball screen prioritizes yours, falling back to other live games, then this week's upcoming games.
+- **NCAA Football screen** - the same rendering as the Football screen above (it reuses the same renderer - logo, team-colored rows, possession marker, timeouts, down-and-distance) plus each ranked team's AP Top 25 number next to their code. A single FBS week has ~100 games versus the NFL's 16, so without a preferred team set, the rotation narrows to games involving a ranked team (falling back to the full slate only if none are currently ranked-relevant) instead of cycling through the entire schedule.
 - **Flight tracker screen** - three big centered rows (route, callsign, aircraft type) for whatever's currently overhead within a configurable radius of home, styled after the reference project's own display rather than cramming in every telemetry field at once. Uses the unofficial FlightRadar24 API - no account or hardware receiver needed. (Approach inspired by [ColinWaddell/FlightTracker](https://github.com/ColinWaddell/FlightTracker) - see Credits.)
 - **Weather screen** - an animated icon (rotating sun, twinkling moon + stars, drifting clouds, falling rain, flashing thunderstorm, falling snow, or drifting fog) matched to OpenWeatherMap's own condition/day-night code, plus temperature, condition text, feels-like, humidity, clock, and city. Falls back to manually-set temp/humidity (shown as clear/sunny) if no API key is configured.
 - **Stock ticker** - rotates through a configurable list of symbols, Yahoo-Finance-styled: company logo, name, and a market-open/closed status bar up top, price and signed change/percent with a trend arrow, and a filled area chart colored to match the period's trend (Yahoo Finance's own chart endpoint, no API key needed). Layout adapted from [feram18/led-stock-ticker](https://github.com/feram18/led-stock-ticker) - see Credits. Chart period (1 Day through All) is configurable in the web UI - the change/% shown always reflects growth or loss over whichever period is selected, same as picking a range on Yahoo Finance's own chart.
 - **Web control panel** (`:5000`) - edit weather/stock/baseball/display settings, pick your preferred team, and manually pin the display to one specific screen.
-- **Games page** (`:5000/games`) - browse every game scheduled today (live, upcoming, or final) and push any one of them to the matrix on demand.
+- **Games page** (`:5000/games`) - full MLB standings (all 30 teams, all 6 divisions, sourced from ESPN, with your preferred team highlighted) above every game scheduled today (live, upcoming, or final); push any one of them to the matrix on demand. Same page layout as the Football page below.
+- **Football page** (`:5000/football`) - the NFL equivalent: full standings (all 32 teams, all 8 divisions) above this week's games grouped by day, with the same "Show on Matrix" per-game control.
+- **College Football page** (`:5000/college-football`) - full FBS standings (all ~130 teams across every conference) above this week's entire schedule (~100 games) grouped by day, ranked teams marked with their AP number, same "Show on Matrix" control.
 
 ## Hardware
 
@@ -92,12 +96,16 @@ Edit `config.json`:
 | `weather.location` | `City,State,Country` (e.g. `Chicago,il,us`) |
 | `weather.metric_units` | `true` for °C, `false` for °F |
 | `display.brightness` | 0-100 |
-| `options.rotation_rate` | Seconds each top-level screen (weather/stocks/baseball/standings/flights) stays up before rotating to the next |
+| `options.rotation_rate` | Seconds each top-level screen (weather/stocks/baseball/standings/flights/football) stays up before rotating to the next |
 | `options.stock_display_time` | Seconds per stock symbol within the stocks screen |
 | `options.chart_period` | Yahoo chart range the stock screen fetches - `1d`, `5d`, `1mo`, `3mo`, `6mo`, `ytd`, `1y`, `2y`, `5y`, `10y`, or `max`. The change/% shown is growth or loss over this whole period, not just the day's move. Easiest set via the web UI's Chart Period dropdown rather than by hand. |
 | `options.baseball_display_time` | Seconds per game within the baseball screen's own rotation |
 | `options.flight_display_time` | Seconds per aircraft within the flight screen's own rotation |
 | `options.preferred_team` | MLB team abbreviation (e.g. `SF`) - this team's live game takes priority, and drives which division shows on the standings screen |
+| `options.football_display_time` | Seconds per game within the football screen's own rotation |
+| `options.preferred_nfl_team` | NFL team abbreviation (e.g. `SF`) - this team's live game takes priority, same as `preferred_team` does for baseball. Leave blank for no preference. |
+| `options.ncaaf_display_time` | Seconds per game within the NCAA football screen's own rotation |
+| `options.preferred_ncaaf_team` | College team's ESPN abbreviation (e.g. `USC`) - this team's live game always takes priority and is always included even if unranked. Leave blank to just show ranked (AP Top 25) games. |
 | `tickers.stocks` | List of stock ticker symbols to rotate through |
 | `flight.home_lat` / `flight.home_lon` | Decimal coordinates of the panel's location - aircraft distance/search radius is measured from here. Look these up once (e.g. via a geocoding API or Google Maps) and hardcode them; the app doesn't do this for you. |
 | `flight.radius_km` | Search radius around home, in km |
@@ -123,9 +131,9 @@ The web control panel is then available at `http://<pi-ip>:5000`.
 
 ## Usage
 
-- **Auto rotation** (default): cycles through weather → stocks → baseball → standings → flights on a timer (`options.rotation_rate`).
-- **Manual screen override**: from the control panel, pin the display to one screen type (Weather/Stocks/Baseball/Standings/Flights) until you switch back to auto rotation.
-- **Pick a specific game**: from the Games page (`/games`), hit "Show on Matrix" on any game to pin the display to that exact game, live or upcoming. It stays pinned until you resume auto rotation or pick another screen/game.
+- **Auto rotation** (default): cycles through weather → stocks → baseball → standings → flights → football → ncaaf on a timer (`options.rotation_rate`).
+- **Manual screen override**: from the control panel, pin the display to one screen type (Weather/Stocks/Baseball/Standings/Flights/Football/NCAAF) until you switch back to auto rotation.
+- **Pick a specific game**: from the Games page (`/games`), Football page (`/football`), or College Football page (`/college-football`), hit "Show on Matrix" on any game to pin the display to that exact game, live or upcoming. It stays pinned until you resume auto rotation or pick another screen/game.
 
 Config changes made through the web UI take effect immediately - the display process picks them up via a signal/reload flag, no restart needed.
 
@@ -140,6 +148,8 @@ self.screens = {
     "baseball": self.draw_baseball,
     "standings": self.draw_standings,
     "flights": self.draw_flights,
+    "football": self.draw_football,
+    "ncaaf": self.draw_ncaaf,
 }
 self.modes = list(self.screens.keys())  # rotation order = insertion order
 ```
@@ -159,9 +169,12 @@ Both the manual-screen-override dispatch and the auto-rotation dispatch in `run(
 | `baseball_complete.py` | `BaseballRenderer` - live/pregame/final game rendering |
 | `standings_screen.py` | `StandingsRenderer` - division standings rendering |
 | `flight_screen.py` | `FlightScreenRenderer` - nearby aircraft rendering |
+| `football_screen.py` | `FootballRenderer` - live/pregame/final game rendering, shared by both the NFL and NCAAF screens (identical game-dict shape) |
 | `mlb_integration.py` | MLB Stats API wrapper - today's games, live game detail, standings, team-name/code/color lookups |
 | `flight_tracker.py` | FlightRadar24 wrapper - nearby aircraft within the configured radius/altitude band |
-| `web_interface.py` | Flask control panel + Games page |
+| `nfl_integration.py` | ESPN scoreboard API wrapper - this week's NFL games, live game detail, team colors |
+| `ncaaf_integration.py` | ESPN scoreboard API wrapper for FBS college football - reuses nfl_integration's `format_local_time`/`_hex_to_rgb` helpers |
+| `web_interface.py` | Flask control panel + Games page (MLB) + Football page (NFL) + College Football page (NCAAF) |
 | `colors_elements.json` | Per-element color overrides (counts, no-hitter badge, standings header, etc.) |
 | `colors_teams.json` | Per-team background/text/accent colors |
 | `config.example.json` | Template for `config.json` (which is gitignored) |
@@ -169,6 +182,7 @@ Both the manual-screen-override dispatch and the auto-rotation dispatch in `run(
 ## Credits
 
 - [MLB-StatsAPI](https://github.com/toddrob99/MLB-StatsAPI) for the Python wrapper around MLB's Stats API
+- ESPN's public (undocumented) scoreboard API for NFL game data - no official docs or key, but it's the same endpoint espn.com/nfl itself calls, and widely relied on by other open-source scoreboard projects
 - [rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix) by hzeller for the matrix driver and Python bindings
 - [MLB-LED-Scoreboard](https://github.com/MLB-LED-Scoreboard/mlb-led-scoreboard) - the standings and no-hitter/perfect-game indicator features were inspired by this project's design
 - [ColinWaddell/FlightTracker](https://github.com/ColinWaddell/FlightTracker) - the flight screen's approach (using the unofficial FlightRadar24 API for nearby-aircraft data) is inspired by this project, though the fetch/render code here is a from-scratch, much simpler implementation sized for this panel rather than a port of FlightTracker's own scene framework

@@ -10,8 +10,22 @@ import secrets
 import subprocess
 import signal
 import time
+from datetime import datetime
 
 from mlb_integration import TEAM_NAME_TO_CODE, mlb_fetcher
+from nfl_integration import nfl_fetcher
+from ncaaf_integration import ncaaf_fetcher
+
+# NFL team abbreviations for the preferred-team dropdown - ESPN's scoreboard
+# API doesn't expose a fixed list endpoint, so this is just the standard
+# 32-team set, unlike TEAM_NAME_TO_CODE which is imported straight from the
+# MLB Stats API wrapper.
+NFL_TEAMS = [
+    "ARI", "ATL", "BAL", "BUF", "CAR", "CHI", "CIN", "CLE", "DAL", "DEN",
+    "DET", "GB", "HOU", "IND", "JAX", "KC", "LAC", "LAR", "LV", "MIA",
+    "MIN", "NE", "NO", "NYG", "NYJ", "PHI", "PIT", "SEA", "SF", "TB",
+    "TEN", "WSH"
+]
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
@@ -337,7 +351,9 @@ HTML_TEMPLATE = '''
         <h1>⚾ MLB Scoreboard Pro Control Panel ⚾</h1>
 
         <div style="text-align:center; margin-bottom: 20px;">
-            <a href="/games" style="display:inline-block; background: linear-gradient(45deg, #00ff87, #60efff); color: #1a1a2e; padding: 12px 25px; border-radius: 10px; font-size: 16px; font-weight: 600; text-decoration: none; box-shadow: 0 4px 15px rgba(0,255,135,0.3);">📅 View All Games</a>
+            <a href="/games" style="display:inline-block; background: linear-gradient(45deg, #00ff87, #60efff); color: #1a1a2e; padding: 12px 25px; border-radius: 10px; font-size: 16px; font-weight: 600; text-decoration: none; box-shadow: 0 4px 15px rgba(0,255,135,0.3); margin: 0 5px;">📅 View All Games</a>
+            <a href="/football" style="display:inline-block; background: linear-gradient(45deg, #00ff87, #60efff); color: #1a1a2e; padding: 12px 25px; border-radius: 10px; font-size: 16px; font-weight: 600; text-decoration: none; box-shadow: 0 4px 15px rgba(0,255,135,0.3); margin: 0 5px;">🏈 NFL Games &amp; Standings</a>
+            <a href="/college-football" style="display:inline-block; background: linear-gradient(45deg, #00ff87, #60efff); color: #1a1a2e; padding: 12px 25px; border-radius: 10px; font-size: 16px; font-weight: 600; text-decoration: none; box-shadow: 0 4px 15px rgba(0,255,135,0.3); margin: 0 5px;">🎓 NCAAF Games &amp; Standings</a>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -375,6 +391,14 @@ HTML_TEMPLATE = '''
                 <div class="screen-btn {{ 'active' if current_screen == 'flights' and mode == 'manual' }}" onclick="selectScreen('flights')">
                     <div class="emoji">✈️</div>
                     <div class="name">Flights</div>
+                </div>
+                <div class="screen-btn {{ 'active' if current_screen == 'football' and mode == 'manual' }}" onclick="selectScreen('football')">
+                    <div class="emoji">🏈</div>
+                    <div class="name">Football</div>
+                </div>
+                <div class="screen-btn {{ 'active' if current_screen == 'ncaaf' and mode == 'manual' }}" onclick="selectScreen('ncaaf')">
+                    <div class="emoji">🎓</div>
+                    <div class="name">NCAAF</div>
                 </div>
             </div>
             
@@ -478,7 +502,44 @@ HTML_TEMPLATE = '''
                     <button type="submit">Update Baseball</button>
                 </form>
             </div>
-            
+
+            <!-- Football Settings -->
+            <div class="card">
+                <h2>🏈 Football Settings</h2>
+                <form action="/update_football" method="post">
+                    <div class="form-group">
+                        <label>Preferred NFL Team:</label>
+                        <select name="preferred_nfl_team">
+                            <option value="">No preference (show all live/upcoming)</option>
+                            {% for code in nfl_teams %}
+                            <option value="{{ code }}" {% if config.options.get('preferred_nfl_team', '') == code %}selected{% endif %}>{{ code }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Time per Game (seconds):</label>
+                        <input type="number" name="football_display_time" value="{{ config.options.get('football_display_time', 8) }}" min="3" max="20">
+                    </div>
+                    <button type="submit">Update Football</button>
+                </form>
+            </div>
+
+            <!-- NCAA Football Settings -->
+            <div class="card">
+                <h2>🎓 NCAA Football Settings</h2>
+                <form action="/update_ncaaf" method="post">
+                    <div class="form-group">
+                        <label>Preferred College Team (ESPN abbreviation, e.g. USC, OSU, BAMA):</label>
+                        <input type="text" name="preferred_ncaaf_team" value="{{ config.options.get('preferred_ncaaf_team', '') }}" placeholder="Leave blank for no preference" style="text-transform: uppercase;">
+                    </div>
+                    <div class="form-group">
+                        <label>Time per Game (seconds):</label>
+                        <input type="number" name="ncaaf_display_time" value="{{ config.options.get('ncaaf_display_time', 8) }}" min="3" max="20">
+                    </div>
+                    <button type="submit">Update NCAA Football</button>
+                </form>
+            </div>
+
             <!-- Display Settings -->
             <div class="card">
                 <h2>⚙️ Display Settings</h2>
@@ -605,7 +666,9 @@ HTML_TEMPLATE = '''
                 else if (name.includes('baseball')) selectedScreen = 'baseball';
                 else if (name.includes('standings')) selectedScreen = 'standings';
                 else if (name.includes('flights')) selectedScreen = 'flights';
-                
+                else if (name.includes('ncaaf')) selectedScreen = 'ncaaf';
+                else if (name.includes('football')) selectedScreen = 'football';
+
                 document.getElementById('selected_screen').value = selectedScreen;
             });
         });
@@ -625,13 +688,11 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
-GAMES_TEMPLATE = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <title>MLB Games</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
+# Shared by GAMES_TEMPLATE (baseball) and FOOTBALL_TEMPLATE - both are
+# "standings + scheduled games" pages built to look and behave the same way,
+# so the CSS lives once here instead of being duplicated (and drifting) across
+# two multi-hundred-line template strings.
+SCHEDULE_PAGE_STYLE = '''
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
@@ -642,7 +703,7 @@ GAMES_TEMPLATE = '''
             color: #fff;
         }
 
-        .container { max-width: 900px; margin: 0 auto; }
+        .container { max-width: 1100px; margin: 0 auto; }
 
         h1 {
             text-align: center;
@@ -652,6 +713,16 @@ GAMES_TEMPLATE = '''
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
+
+        h2.section-title {
+            font-size: 1.6em;
+            margin: 30px 0 15px;
+            color: #00ff87;
+            border-bottom: 2px solid #00ff87;
+            padding-bottom: 8px;
+        }
+
+        h3.day-title { color: #60efff; font-size: 1.1em; margin: 18px 0 10px; }
 
         .top-links { text-align: center; margin-bottom: 25px; }
 
@@ -695,11 +766,12 @@ GAMES_TEMPLATE = '''
 
         .game-card.selected { border-color: #00ff87; box-shadow: 0 0 15px rgba(0,255,135,0.3); }
 
-        .game-info { flex: 1; min-width: 200px; }
+        .game-info { flex: 1; min-width: 220px; }
 
         .matchup { font-size: 1.2em; font-weight: 600; margin-bottom: 4px; }
 
         .game-meta { color: #60efff; font-size: 0.9em; }
+        .game-meta.redzone { color: #ff416c; font-weight: 600; }
 
         .badge {
             display: inline-block;
@@ -736,11 +808,52 @@ GAMES_TEMPLATE = '''
             color: #60efff;
             font-size: 1.1em;
         }
-    </style>
+
+        .standings-columns {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+            gap: 25px;
+        }
+
+        .division-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 15px 18px;
+            margin-bottom: 18px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .division-card h4 { color: #60efff; margin-bottom: 8px; font-size: 1em; }
+
+        table.standings-table { width: 100%; border-collapse: collapse; }
+
+        table.standings-table th {
+            text-align: left;
+            font-size: 11px;
+            color: #888;
+            text-transform: uppercase;
+            padding: 4px 6px;
+            border-bottom: 1px solid rgba(255,255,255,0.15);
+        }
+
+        table.standings-table th.num, table.standings-table td.num { text-align: right; }
+
+        table.standings-table td { padding: 6px; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+
+        table.standings-table tr.preferred td { color: #00ff87; font-weight: 700; }
+'''
+
+GAMES_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MLB Games &amp; Standings</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>''' + SCHEDULE_PAGE_STYLE + '''</style>
 </head>
 <body>
     <div class="container">
-        <h1>📅 Today's MLB Games</h1>
+        <h1>⚾ MLB Games &amp; Standings</h1>
         <div class="top-links">
             <a href="/">⚙️ Control Panel</a>
             <form action="/set_auto" method="post" style="display:inline;">
@@ -755,6 +868,56 @@ GAMES_TEMPLATE = '''
                 {% endfor %}
             {% endif %}
         {% endwith %}
+
+        <h2 class="section-title">Standings</h2>
+
+        <div class="standings-columns">
+            <div>
+                {% for division, teams in standings.items() if 'AL' in division %}
+                <div class="division-card">
+                    <h4>{{ division }}</h4>
+                    <table class="standings-table">
+                        <tr><th>Team</th><th class="num">W</th><th class="num">L</th><th class="num">PCT</th><th class="num">GB</th><th class="num">STRK</th></tr>
+                        {% for team in teams %}
+                        <tr class="{{ 'preferred' if team.code == preferred_team }}">
+                            <td>{{ team.code }}</td>
+                            <td class="num">{{ team.wins }}</td>
+                            <td class="num">{{ team.losses }}</td>
+                            <td class="num">{{ team.pct }}</td>
+                            <td class="num">{{ team.gb }}</td>
+                            <td class="num">{{ team.streak }}</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+                {% endfor %}
+            </div>
+            <div>
+                {% for division, teams in standings.items() if 'NL' in division %}
+                <div class="division-card">
+                    <h4>{{ division }}</h4>
+                    <table class="standings-table">
+                        <tr><th>Team</th><th class="num">W</th><th class="num">L</th><th class="num">PCT</th><th class="num">GB</th><th class="num">STRK</th></tr>
+                        {% for team in teams %}
+                        <tr class="{{ 'preferred' if team.code == preferred_team }}">
+                            <td>{{ team.code }}</td>
+                            <td class="num">{{ team.wins }}</td>
+                            <td class="num">{{ team.losses }}</td>
+                            <td class="num">{{ team.pct }}</td>
+                            <td class="num">{{ team.gb }}</td>
+                            <td class="num">{{ team.streak }}</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% if not standings %}
+            <div class="empty-state">Standings unavailable right now.</div>
+        {% endif %}
+
+        <h2 class="section-title">Today's Games</h2>
 
         {% if not games %}
             <div class="empty-state">No games scheduled today.</div>
@@ -799,6 +962,247 @@ GAMES_TEMPLATE = '''
 </body>
 </html>
 '''
+
+FOOTBALL_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>NFL Games &amp; Standings</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>''' + SCHEDULE_PAGE_STYLE + '''</style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏈 NFL Games &amp; Standings</h1>
+        <div class="top-links">
+            <a href="/">⚙️ Control Panel</a>
+            <form action="/set_auto" method="post" style="display:inline;">
+                <button type="submit" class="btn-success">🔄 Resume Auto Rotation</button>
+            </form>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <h2 class="section-title">Standings</h2>
+
+        <div class="standings-columns">
+            <div>
+                {% for division, teams in standings.items() if 'AFC' in division %}
+                <div class="division-card">
+                    <h4>{{ division }}</h4>
+                    <table class="standings-table">
+                        <tr><th>Team</th><th class="num">W</th><th class="num">L</th><th class="num">T</th><th class="num">PCT</th><th class="num">STRK</th></tr>
+                        {% for team in teams %}
+                        <tr class="{{ 'preferred' if team.code == preferred_team }}">
+                            <td>{{ team.code }}</td>
+                            <td class="num">{{ team.wins }}</td>
+                            <td class="num">{{ team.losses }}</td>
+                            <td class="num">{{ team.ties }}</td>
+                            <td class="num">{{ team.pct }}</td>
+                            <td class="num">{{ team.streak }}</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+                {% endfor %}
+            </div>
+            <div>
+                {% for division, teams in standings.items() if 'NFC' in division %}
+                <div class="division-card">
+                    <h4>{{ division }}</h4>
+                    <table class="standings-table">
+                        <tr><th>Team</th><th class="num">W</th><th class="num">L</th><th class="num">T</th><th class="num">PCT</th><th class="num">STRK</th></tr>
+                        {% for team in teams %}
+                        <tr class="{{ 'preferred' if team.code == preferred_team }}">
+                            <td>{{ team.code }}</td>
+                            <td class="num">{{ team.wins }}</td>
+                            <td class="num">{{ team.losses }}</td>
+                            <td class="num">{{ team.ties }}</td>
+                            <td class="num">{{ team.pct }}</td>
+                            <td class="num">{{ team.streak }}</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% if not standings %}
+            <div class="empty-state">Standings unavailable right now.</div>
+        {% endif %}
+
+        <h2 class="section-title">This Week's Games</h2>
+
+        {% if not game_groups %}
+            <div class="empty-state">No NFL games scheduled this week.</div>
+        {% endif %}
+
+        {% for day, games in game_groups %}
+        <h3 class="day-title">{{ day }}</h3>
+        {% for game in games %}
+        <div class="game-card {{ 'selected' if selected_game_id == game.game_id|string }}">
+            <div class="game-info">
+                <div>
+                    {% if game.status == 'live' %}
+                        <span class="badge badge-live">Live</span>
+                    {% elif game.status == 'pregame' %}
+                        <span class="badge badge-upcoming">Upcoming</span>
+                    {% elif game.status == 'final' %}
+                        <span class="badge badge-final">Final</span>
+                    {% endif %}
+                </div>
+                <div class="matchup">{{ game.away.code }} {{ game.away.score }} @ {{ game.home.code }} {{ game.home.score }}</div>
+                <div class="game-meta {{ 'redzone' if game.red_zone }}">
+                    {% if game.status == 'pregame' %}
+                        Kickoff {{ game.start_time_local or 'TBD' }}
+                    {% else %}
+                        {{ game.status_text }}{% if game.status == 'live' and game.down_distance %} &middot; {{ game.down_distance }}{% endif %}
+                    {% endif %}
+                </div>
+            </div>
+            <div class="game-actions">
+                <form action="/select_football_game" method="post">
+                    <input type="hidden" name="game_id" value="{{ game.game_id }}">
+                    <button type="submit" class="{{ 'active' if selected_game_id == game.game_id|string }}">
+                        {{ '▶ Showing Now' if selected_game_id == game.game_id|string else 'Show on Matrix' }}
+                    </button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+        {% endfor %}
+    </div>
+</body>
+</html>
+'''
+
+NCAAF_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>NCAA Football Games &amp; Standings</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>''' + SCHEDULE_PAGE_STYLE + '''</style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎓 NCAA Football Games &amp; Standings</h1>
+        <div class="top-links">
+            <a href="/">⚙️ Control Panel</a>
+            <form action="/set_auto" method="post" style="display:inline;">
+                <button type="submit" class="btn-success">🔄 Resume Auto Rotation</button>
+            </form>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <h2 class="section-title">Standings</h2>
+
+        <div class="standings-columns">
+            {% for conference, teams in standings.items() %}
+            <div class="division-card">
+                <h4>{{ conference }}</h4>
+                <table class="standings-table">
+                    <tr><th>Team</th><th class="num">W</th><th class="num">L</th><th class="num">PCT</th><th class="num">STRK</th></tr>
+                    {% for team in teams %}
+                    <tr class="{{ 'preferred' if team.code == preferred_team }}">
+                        <td>{{ team.code }}</td>
+                        <td class="num">{{ team.wins }}</td>
+                        <td class="num">{{ team.losses }}</td>
+                        <td class="num">{{ team.pct }}</td>
+                        <td class="num">{{ team.streak }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+            {% endfor %}
+        </div>
+        {% if not standings %}
+            <div class="empty-state">Standings unavailable right now.</div>
+        {% endif %}
+
+        <h2 class="section-title">This Week's Games</h2>
+
+        {% if not game_groups %}
+            <div class="empty-state">No NCAA football games scheduled this week.</div>
+        {% endif %}
+
+        {% for day, games in game_groups %}
+        <h3 class="day-title">{{ day }}</h3>
+        {% for game in games %}
+        <div class="game-card {{ 'selected' if selected_game_id == game.game_id|string }}">
+            <div class="game-info">
+                <div>
+                    {% if game.status == 'live' %}
+                        <span class="badge badge-live">Live</span>
+                    {% elif game.status == 'pregame' %}
+                        <span class="badge badge-upcoming">Upcoming</span>
+                    {% elif game.status == 'final' %}
+                        <span class="badge badge-final">Final</span>
+                    {% endif %}
+                </div>
+                <div class="matchup">
+                    {% if game.away.rank %}#{{ game.away.rank }} {% endif %}{{ game.away.code }} {{ game.away.score }}
+                    @
+                    {% if game.home.rank %}#{{ game.home.rank }} {% endif %}{{ game.home.code }} {{ game.home.score }}
+                </div>
+                <div class="game-meta {{ 'redzone' if game.red_zone }}">
+                    {% if game.status == 'pregame' %}
+                        Kickoff {{ game.start_time_local or 'TBD' }}
+                    {% else %}
+                        {{ game.status_text }}{% if game.status == 'live' and game.down_distance %} &middot; {{ game.down_distance }}{% endif %}
+                    {% endif %}
+                </div>
+            </div>
+            <div class="game-actions">
+                <form action="/select_ncaaf_game" method="post">
+                    <input type="hidden" name="game_id" value="{{ game.game_id }}">
+                    <button type="submit" class="{{ 'active' if selected_game_id == game.game_id|string }}">
+                        {{ '▶ Showing Now' if selected_game_id == game.game_id|string else 'Show on Matrix' }}
+                    </button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+        {% endfor %}
+    </div>
+</body>
+</html>
+'''
+
+def _group_games_by_day(games):
+    """Groups games into (day label, games) pairs in the order the day first
+    appears - get_current_games() already returns them kickoff-time-ascending,
+    so this just clusters consecutive same-day games under one heading rather
+    than re-sorting anything, same effect as ESPN's own scoreboard page."""
+    groups = {}
+    order = []
+    for game in games:
+        try:
+            dt = datetime.fromisoformat(game['start_time'].replace('Z', '+00:00')).astimezone()
+            # strftime's day-of-month field is zero-padded with no portable way
+            # to suppress it across platforms (%-d is Linux-only, %#d Windows-
+            # only) - stripping a leading zero by hand avoids needing either.
+            key = dt.strftime('%A, %B %d').replace(' 0', ' ')
+        except Exception:
+            key = 'This Week'
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(game)
+    return [(key, groups[key]) for key in order]
 
 def trigger_reload():
     """Trigger the display manager to reload configuration"""
@@ -866,7 +1270,11 @@ def load_config():
                 "stock_display_time": 5,
                 "baseball_display_time": 8,
                 "flight_display_time": 8,
+                "football_display_time": 8,
+                "ncaaf_display_time": 8,
                 "preferred_team": "SF",
+                "preferred_nfl_team": "",
+                "preferred_ncaaf_team": "",
                 "currency": "USD",
                 "date_format": "MM/DD/YYYY",
                 "show_logos": True,
@@ -899,6 +1307,7 @@ def index():
         mode=mode_data['mode'],
         current_screen=mode_data.get('screen', 'weather'),
         teams=TEAMS,
+        nfl_teams=NFL_TEAMS,
         chart_periods=CHART_PERIODS
     )
 
@@ -964,6 +1373,30 @@ def update_baseball():
     flash('Baseball settings updated!', 'success')
     return redirect(url_for('index'))
 
+@app.route('/update_football', methods=['POST'])
+def update_football():
+    config = load_config()
+
+    config['options']['football_display_time'] = int(request.form['football_display_time'])
+    config['options']['preferred_nfl_team'] = request.form['preferred_nfl_team']
+
+    save_config(config)
+    trigger_reload()
+    flash('Football settings updated!', 'success')
+    return redirect(url_for('index'))
+
+@app.route('/update_ncaaf', methods=['POST'])
+def update_ncaaf():
+    config = load_config()
+
+    config['options']['ncaaf_display_time'] = int(request.form['ncaaf_display_time'])
+    config['options']['preferred_ncaaf_team'] = request.form['preferred_ncaaf_team'].strip().upper()
+
+    save_config(config)
+    trigger_reload()
+    flash('NCAA Football settings updated!', 'success')
+    return redirect(url_for('index'))
+
 @app.route('/update_display', methods=['POST'])
 def update_display():
     config = load_config()
@@ -1023,13 +1456,21 @@ def games_page():
     status_order = {'live': 0, 'pregame': 1, 'final': 2}
     games.sort(key=lambda g: (status_order.get(g['status'], 3), g.get('start_time', '')))
 
+    standings = mlb_fetcher.get_full_standings()
+
     mode_data = get_display_mode()
-    selected_game_id = str(mode_data.get('game_id')) if mode_data.get('mode') == 'manual' and mode_data.get('game_id') else None
+    selected_game_id = None
+    if mode_data.get('mode') == 'manual' and mode_data.get('screen') == 'baseball' and mode_data.get('game_id'):
+        selected_game_id = str(mode_data.get('game_id'))
+
+    config = load_config()
 
     return render_template_string(
         GAMES_TEMPLATE,
         games=games,
-        selected_game_id=selected_game_id
+        standings=standings,
+        selected_game_id=selected_game_id,
+        preferred_team=config.get('options', {}).get('preferred_team', 'SF')
     )
 
 @app.route('/select_game', methods=['POST'])
@@ -1038,6 +1479,62 @@ def select_game():
     set_display_mode('manual', 'baseball', game_id=game_id)
     flash('✅ Showing selected game on the display', 'success')
     return redirect(url_for('games_page'))
+
+@app.route('/football')
+def football_page():
+    games = nfl_fetcher.get_current_games()
+    game_groups = _group_games_by_day(games)
+    standings = nfl_fetcher.get_standings()
+
+    mode_data = get_display_mode()
+    selected_game_id = None
+    if mode_data.get('mode') == 'manual' and mode_data.get('screen') == 'football' and mode_data.get('game_id'):
+        selected_game_id = str(mode_data.get('game_id'))
+
+    config = load_config()
+
+    return render_template_string(
+        FOOTBALL_TEMPLATE,
+        game_groups=game_groups,
+        standings=standings,
+        selected_game_id=selected_game_id,
+        preferred_team=config.get('options', {}).get('preferred_nfl_team', '')
+    )
+
+@app.route('/select_football_game', methods=['POST'])
+def select_football_game():
+    game_id = request.form['game_id']
+    set_display_mode('manual', 'football', game_id=game_id)
+    flash('✅ Showing selected game on the display', 'success')
+    return redirect(url_for('football_page'))
+
+@app.route('/college-football')
+def ncaaf_page():
+    games = ncaaf_fetcher.get_current_games()
+    game_groups = _group_games_by_day(games)
+    standings = ncaaf_fetcher.get_standings()
+
+    mode_data = get_display_mode()
+    selected_game_id = None
+    if mode_data.get('mode') == 'manual' and mode_data.get('screen') == 'ncaaf' and mode_data.get('game_id'):
+        selected_game_id = str(mode_data.get('game_id'))
+
+    config = load_config()
+
+    return render_template_string(
+        NCAAF_TEMPLATE,
+        game_groups=game_groups,
+        standings=standings,
+        selected_game_id=selected_game_id,
+        preferred_team=config.get('options', {}).get('preferred_ncaaf_team', '')
+    )
+
+@app.route('/select_ncaaf_game', methods=['POST'])
+def select_ncaaf_game():
+    game_id = request.form['game_id']
+    set_display_mode('manual', 'ncaaf', game_id=game_id)
+    flash('✅ Showing selected game on the display', 'success')
+    return redirect(url_for('ncaaf_page'))
 
 @app.route('/api/mode', methods=['GET'])
 def api_mode():
