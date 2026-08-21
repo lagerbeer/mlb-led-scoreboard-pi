@@ -22,17 +22,17 @@ import rgbmatrix.graphics
 from PIL import Image
 
 LOGO_DIR = '/home/pi/mlb_scoreboard/assets/nfl_logos'
-LOGO_SIZE = (16, 16)
+LOGO_SIZE = (20, 20)
 
 LAYOUT = {
     "top_y": 8,
-    "logo_y": 12,
-    "score_y": 28,
-    "name_y": 40,
-    "detail_y": 51,
-    "lastplay_y": 61,
-    "away_logo_x": 4,
-    "home_logo_x": 108,
+    "logo_y": 11,
+    "score_y": 27,
+    "name_y": 44,
+    "detail_y": 54,
+    "lastplay_y": 62,
+    "away_logo_x": 2,
+    "home_logo_x": 106,
 }
 
 
@@ -152,8 +152,13 @@ class FootballRenderer:
         try:
             logo = Image.open(logo_path).convert('RGBA')
             img_w, img_h = logo.size
-            draw_w = min(LOGO_SIZE[0], img_w, 16)
-            draw_h = min(LOGO_SIZE[1], img_h, 16)
+            # Bounded by the cached image's actual size and LOGO_SIZE, not a
+            # hardcoded 16px - that cap used to silently truncate logos back
+            # down to 16x16 regardless of what LOGO_SIZE was actually set to.
+            # The per-pixel canvas_x/canvas_y bounds check below already
+            # guards against drawing off-panel, so nothing else needs it.
+            draw_w = min(LOGO_SIZE[0], img_w)
+            draw_h = min(LOGO_SIZE[1], img_h)
             for dx in range(draw_w):
                 for dy in range(draw_h):
                     canvas_x = x + dx
@@ -211,8 +216,12 @@ class FootballRenderer:
         MARKER_WIDTH = 6
         GAP = 4
 
+        # font_large for the code itself (bigger, matches the bigger logos) -
+        # timeout pips/possession marker stay their existing small size, just
+        # repositioned a bit higher to sit roughly centered against the
+        # taller glyphs instead of hugging their baseline.
         display_text = self._team_display_text(team)
-        code_width = self.text_width(self.font_small, display_text)
+        code_width = self.text_width(self.font_large, display_text)
         has_timeouts = team.get('timeouts') is not None
 
         total = code_width
@@ -223,17 +232,17 @@ class FootballRenderer:
 
         cx = (anchor_x - total) if align_right else anchor_x
 
-        rgbmatrix.graphics.DrawText(self.canvas, self.font_small, cx, LAYOUT["name_y"], self.WHITE, display_text)
+        rgbmatrix.graphics.DrawText(self.canvas, self.font_large, cx, LAYOUT["name_y"], self.WHITE, display_text)
         cx += code_width
 
         if has_timeouts:
             cx += GAP
-            self._draw_timeouts(cx + TIMEOUT_DOTS_WIDTH, LAYOUT["name_y"] - 5, team.get('timeouts'), self.YELLOW)
+            self._draw_timeouts(cx + TIMEOUT_DOTS_WIDTH, LAYOUT["name_y"] - 7, team.get('timeouts'), self.YELLOW)
             cx += TIMEOUT_DOTS_WIDTH
 
         if has_possession:
             cx += GAP
-            self._draw_possession_marker(cx, LAYOUT["name_y"] - 6, self.YELLOW)
+            self._draw_possession_marker(cx, LAYOUT["name_y"] - 8, self.YELLOW)
 
     def render_game(self, game):
         """Render complete game: top strip (league label left, clock/status
@@ -277,7 +286,7 @@ class FootballRenderer:
 
         # Team identity rows
         self._draw_team_identity(away, possession == 'away', LAYOUT["away_logo_x"], align_right=False)
-        self._draw_team_identity(home, possession == 'home', LAYOUT["home_logo_x"] + 16, align_right=True)
+        self._draw_team_identity(home, possession == 'home', LAYOUT["home_logo_x"] + LOGO_SIZE[0], align_right=True)
 
         # Down-and-distance + field position, combined onto one centered line
         if down_distance or field_position:
