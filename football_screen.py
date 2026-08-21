@@ -228,9 +228,10 @@ class FootballRenderer:
     def render_game(self, game):
         """Render complete game: status row, away/home team rows (colored to
         that team's real color, with a possession marker next to whichever
-        team has the ball), and a down-and-distance row - the down-and-distance
-        row is skipped for pregame games (nothing to show yet) in favor of the
-        centered kickoff time already shown in the status row."""
+        team has the ball), and a down-and-distance-and-field-position row
+        (e.g. "3rd & 7 at NE 35") - skipped for pregame games (nothing to
+        show yet) in favor of the centered kickoff time already shown in the
+        status row."""
         self.canvas.Fill(0, 0, 0)
 
         status_color = self.YELLOW
@@ -246,5 +247,11 @@ class FootballRenderer:
                              LAYOUT["home"]["text_y"], game.get('possession') == 'home')
 
         if game['status'] == 'live' and game.get('down_distance'):
+            # down_distance is ESPN's full downDistanceText (e.g. "3rd & 7 at
+            # NE 35"), not just the down/distance part - "at NE 35" is the
+            # ball's field position, team-relative (whichever team's own
+            # territory it's in), same as it'd be called on a broadcast.
+            # Scrolls like the status row above if a longer variant doesn't
+            # fit, rather than centering (which would need a static width).
             detail_color = self.RED if game.get('red_zone') else self.GRAY
-            self._draw_centered(self.font_small, LAYOUT["detail_y"], detail_color, game['down_distance'])
+            self.draw_scrolling_text("detail", self.font_small, 4, LAYOUT["detail_y"], 120, detail_color, game['down_distance'])
