@@ -151,10 +151,13 @@ class NFLDataFetcher:
                     'home': home_info,
                     'away': away_info,
                     'status_text': status_text,
-                    # downDistanceText (not the "short" variant) includes the
-                    # ball's field position - e.g. "3rd & 7 at NE 35" - team-
-                    # relative to whichever side of the field it's actually on.
-                    'down_distance': situation.get('downDistanceText', ''),
+                    # Two separate short fields rather than the combined
+                    # downDistanceText ("3rd & 7 at NE 35") - down_distance
+                    # goes on the LED screen's top row, field_position on
+                    # whichever team's row has the ball; both need to be
+                    # short enough to display without scrolling.
+                    'down_distance': situation.get('shortDownDistanceText', ''),
+                    'field_position': situation.get('possessionText', ''),
                     'last_play': (situation.get('lastPlay') or {}).get('text', ''),
                     'possession': possession,
                     'red_zone': situation.get('isRedZone', False),
