@@ -18,23 +18,24 @@ from PIL import Image
 LOGO_DIR = '/home/pi/mlb_scoreboard/assets/nfl_logos'
 LOGO_SIZE = (16, 16)
 
-# Two big team rows (24px each) sandwiched between a top row and a bottom
-# row. Top row splits into two independently-scrolling zones sharing one
-# y - clock/status anchored on the left, ball placement (down-and-distance +
-# field position) right next to it - rather than one wide scrolling string,
-# so the clock can't ever get scrolled out of view just because the yard-
-# line text happens to be long. Bottom row is the last play, full width.
+# Two big team rows (24px each) sandwiched between a top row (clock/status,
+# full width) and a bottom row (last play, full width). Within each team
+# row, the code and score sit close together right after the logo instead of
+# score being pushed out to the far edge - that used to leave a wide dead
+# gap in the middle of every row. Ball placement (down-and-distance + field
+# position) now lives in that reclaimed space, on whichever team's row
+# currently has the ball - it's team-relative info by nature (e.g. "at NE
+# 35"), so showing it on that team's own row instead of a shared top strip
+# reinforces which side of the field it's talking about, same idea as the
+# possession marker already sitting on that row.
 LAYOUT = {
     "top_y": 9,
-    "clock_x": 2,
-    "clock_max_width": 58,
-    "yardline_x": 64,
-    "yardline_max_width": 62,
     "away": {"bg_y_start": 12, "bg_y_end": 32, "text_y": 27},
     "home": {"bg_y_start": 32, "bg_y_end": 52, "text_y": 47},
     "bottom_y": 61,
     "logo_x": 2,
     "code_x": 21,
+    "score_gap": 6,
     "score_right_margin": 4
 }
 
@@ -207,7 +208,7 @@ class FootballRenderer:
             for dx in range(half + 1):
                 self.canvas.SetPixel(x + dx, y + row, color.red, color.green, color.blue)
 
-    def _draw_team_row(self, team, bg_y_start, bg_y_end, text_y, has_possession):
+    def _draw_team_row(self, team, bg_y_start, bg_y_end, text_y, has_possession, down_distance=None, red_zone=False):
         bg_color = rgbmatrix.graphics.Color(*team['color'])
         text_color = self.get_contrasting_text_color(bg_color)
         self.fill_background(bg_y_start, bg_y_end, bg_color)
@@ -219,46 +220,56 @@ class FootballRenderer:
         code_x = LAYOUT["code_x"]
         display_text = f"#{team['rank']} {team['code']}" if team.get('rank') else team['code']
         rgbmatrix.graphics.DrawText(self.canvas, self.font_large, code_x, text_y, text_color, display_text)
+        cursor_x = code_x + self.text_width(self.font_large, display_text) + 3
 
         if has_possession:
-            marker_x = code_x + self.text_width(self.font_large, display_text) + 3
-            self._draw_possession_marker(marker_x, text_y - 9, text_color)
+            self._draw_possession_marker(cursor_x, text_y - 9, text_color)
+            cursor_x += 8
 
         score_text = str(team.get('score', 0))
-        score_width = self.text_width(self.font_large, score_text)
-        score_x = 128 - LAYOUT["score_right_margin"] - score_width
-        rgbmatrix.graphics.DrawText(self.canvas, self.font_large, score_x, text_y, text_color, score_text)
+        rgbmatrix.graphics.DrawText(self.canvas, self.font_large, cursor_x, text_y, text_color, score_text)
+        cursor_x += self.text_width(self.font_large, score_text) + LAYOUT["score_gap"]
 
-        self._draw_timeouts(128 - LAYOUT["score_right_margin"], bg_y_end - 3, team.get('timeouts'), text_color)
+        timeouts_x = 128 - LAYOUT["score_right_margin"]
+        self._draw_timeouts(timeouts_x, bg_y_end - 3, team.get('timeouts'), text_color)
+
+        if down_distance:
+            # Leave room for the timeout pips at the right edge - if there's
+            # not enough space left to be legible, just skip it rather than
+            # cramming a couple of scrambled characters in.
+            max_width = (timeouts_x - 16) - cursor_x
+            if max_width > 20:
+                detail_color = self.RED if red_zone else text_color
+                self.draw_scrolling_text(f"yardline-{team['code']}", self.font_small, cursor_x, text_y,
+                                          max_width, detail_color, down_distance)
 
     def render_game(self, game):
-        """Render complete game: a top row (clock/status anchored left, ball
-        placement in its own zone next to it), away/home team rows (colored
-        to that team's real color, with a possession marker next to whichever
-        team has the ball), and the last play along the bottom. Pregame just
-        centers the kickoff time on the top row - there's no clock or ball
-        placement yet."""
+        """Render complete game: a top row (clock/status, full width), away/
+        home team rows (colored to that team's real color, code+score
+        clustered together next to the logo, ball placement filling the rest
+        of whichever team's row currently has possession), and the last play
+        along the bottom. Pregame just centers the kickoff time on the top
+        row - there's no clock or ball placement yet."""
         self.canvas.Fill(0, 0, 0)
 
         status_color = self.YELLOW
         status_text = game.get('status_text', '')
         down_distance = game.get('down_distance', '')
         last_play = game.get('last_play', '')
+        red_zone = game.get('red_zone', False)
+        possession = game.get('possession')
 
         if game['status'] == 'pregame':
             self._draw_centered(self.font_small, LAYOUT["top_y"], status_color, status_text)
         else:
-            self.draw_scrolling_text("clock", self.font_small, LAYOUT["clock_x"], LAYOUT["top_y"],
-                                      LAYOUT["clock_max_width"], status_color, status_text)
-            if down_distance:
-                yardline_color = self.RED if game.get('red_zone') else self.GRAY
-                self.draw_scrolling_text("yardline", self.font_small, LAYOUT["yardline_x"], LAYOUT["top_y"],
-                                          LAYOUT["yardline_max_width"], yardline_color, down_distance)
+            self.draw_scrolling_text("clock", self.font_small, 4, LAYOUT["top_y"], 120, status_color, status_text)
 
         self._draw_team_row(game['away'], LAYOUT["away"]["bg_y_start"], LAYOUT["away"]["bg_y_end"],
-                             LAYOUT["away"]["text_y"], game.get('possession') == 'away')
+                             LAYOUT["away"]["text_y"], possession == 'away',
+                             down_distance if possession == 'away' else None, red_zone)
         self._draw_team_row(game['home'], LAYOUT["home"]["bg_y_start"], LAYOUT["home"]["bg_y_end"],
-                             LAYOUT["home"]["text_y"], game.get('possession') == 'home')
+                             LAYOUT["home"]["text_y"], possession == 'home',
+                             down_distance if possession == 'home' else None, red_zone)
 
         if game['status'] == 'live' and last_play:
             self.draw_scrolling_text("lastplay", self.font_small, 4, LAYOUT["bottom_y"], 120, self.GRAY, last_play)
