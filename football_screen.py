@@ -18,17 +18,21 @@ from PIL import Image
 LOGO_DIR = '/home/pi/mlb_scoreboard/assets/nfl_logos'
 LOGO_SIZE = (16, 16)
 
-# Two big team rows (24px each) sandwiched between the down-and-distance/
-# last-play row up top and the status row (quarter/clock, halftime, kickoff
-# time, or final) at the bottom - there's no linescore grid like baseball's,
-# since a football game only has two numbers that matter: each team's
-# current score. Ball placement sits at the top, left-aligned (it's what a
-# viewer glancing at the panel wants first), status at the bottom.
+# Two big team rows (24px each) sandwiched between a top row and a bottom
+# row. Top row splits into two independently-scrolling zones sharing one
+# y - clock/status anchored on the left, ball placement (down-and-distance +
+# field position) right next to it - rather than one wide scrolling string,
+# so the clock can't ever get scrolled out of view just because the yard-
+# line text happens to be long. Bottom row is the last play, full width.
 LAYOUT = {
-    "detail_y": 9,
+    "top_y": 9,
+    "clock_x": 2,
+    "clock_max_width": 58,
+    "yardline_x": 64,
+    "yardline_max_width": 62,
     "away": {"bg_y_start": 12, "bg_y_end": 32, "text_y": 27},
     "home": {"bg_y_start": 32, "bg_y_end": 52, "text_y": 47},
-    "status_y": 61,
+    "bottom_y": 61,
     "logo_x": 2,
     "code_x": 21,
     "score_right_margin": 4
@@ -228,38 +232,33 @@ class FootballRenderer:
         self._draw_timeouts(128 - LAYOUT["score_right_margin"], bg_y_end - 3, team.get('timeouts'), text_color)
 
     def render_game(self, game):
-        """Render complete game: status row, away/home team rows (colored to
-        that team's real color, with a possession marker next to whichever
-        team has the ball), and a down-and-distance-and-field-position row
-        (e.g. "3rd & 7 at NE 35") - skipped for pregame games (nothing to
-        show yet) in favor of the centered kickoff time already shown in the
-        status row."""
+        """Render complete game: a top row (clock/status anchored left, ball
+        placement in its own zone next to it), away/home team rows (colored
+        to that team's real color, with a possession marker next to whichever
+        team has the ball), and the last play along the bottom. Pregame just
+        centers the kickoff time on the top row - there's no clock or ball
+        placement yet."""
         self.canvas.Fill(0, 0, 0)
 
         status_color = self.YELLOW
         status_text = game.get('status_text', '')
+        down_distance = game.get('down_distance', '')
+        last_play = game.get('last_play', '')
+
         if game['status'] == 'pregame':
-            self._draw_centered(self.font_small, LAYOUT["status_y"], status_color, status_text)
+            self._draw_centered(self.font_small, LAYOUT["top_y"], status_color, status_text)
         else:
-            self.draw_scrolling_text("status", self.font_small, 4, LAYOUT["status_y"], 120, status_color, status_text)
+            self.draw_scrolling_text("clock", self.font_small, LAYOUT["clock_x"], LAYOUT["top_y"],
+                                      LAYOUT["clock_max_width"], status_color, status_text)
+            if down_distance:
+                yardline_color = self.RED if game.get('red_zone') else self.GRAY
+                self.draw_scrolling_text("yardline", self.font_small, LAYOUT["yardline_x"], LAYOUT["top_y"],
+                                          LAYOUT["yardline_max_width"], yardline_color, down_distance)
 
         self._draw_team_row(game['away'], LAYOUT["away"]["bg_y_start"], LAYOUT["away"]["bg_y_end"],
                              LAYOUT["away"]["text_y"], game.get('possession') == 'away')
         self._draw_team_row(game['home'], LAYOUT["home"]["bg_y_start"], LAYOUT["home"]["bg_y_end"],
                              LAYOUT["home"]["text_y"], game.get('possession') == 'home')
 
-        down_distance = game.get('down_distance', '')
-        last_play = game.get('last_play', '')
-        if game['status'] == 'live' and (down_distance or last_play):
-            # down_distance is ESPN's full downDistanceText (e.g. "3rd & 7 at
-            # NE 35"), not just the down/distance part - "at NE 35" is the
-            # ball's field position, team-relative (whichever team's own
-            # territory it's in), same as it'd be called on a broadcast.
-            # last_play (e.g. "(Shotgun) B.Rypien pass incomplete deep middle
-            # to J.Kelly.") is appended onto the same row rather than given
-            # its own - there's no spare row left on a 64px-tall panel that
-            # isn't already status/away/home, so this one row scrolls through
-            # both pieces as a single ticker instead.
-            detail_text = f"{down_distance}  -  {last_play}" if (down_distance and last_play) else (down_distance or last_play)
-            detail_color = self.RED if game.get('red_zone') else self.GRAY
-            self.draw_scrolling_text("detail", self.font_small, 4, LAYOUT["detail_y"], 120, detail_color, detail_text)
+        if game['status'] == 'live' and last_play:
+            self.draw_scrolling_text("lastplay", self.font_small, 4, LAYOUT["bottom_y"], 120, self.GRAY, last_play)
