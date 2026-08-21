@@ -155,6 +155,7 @@ class NFLDataFetcher:
                     # ball's field position - e.g. "3rd & 7 at NE 35" - team-
                     # relative to whichever side of the field it's actually on.
                     'down_distance': situation.get('downDistanceText', ''),
+                    'last_play': (situation.get('lastPlay') or {}).get('text', ''),
                     'possession': possession,
                     'red_zone': situation.get('isRedZone', False),
                     'start_time': start_time,

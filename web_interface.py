@@ -1065,6 +1065,9 @@ FOOTBALL_TEMPLATE = '''
                         {{ game.status_text }}{% if game.status == 'live' and game.down_distance %} &middot; {{ game.down_distance }}{% endif %}
                     {% endif %}
                 </div>
+                {% if game.status == 'live' and game.last_play %}
+                <div class="small" style="color:#888; margin-top:2px;">{{ game.last_play }}</div>
+                {% endif %}
             </div>
             <div class="game-actions">
                 <form action="/select_football_game" method="post">
@@ -1165,6 +1168,9 @@ NCAAF_TEMPLATE = '''
                         {{ game.status_text }}{% if game.status == 'live' and game.down_distance %} &middot; {{ game.down_distance }}{% endif %}
                     {% endif %}
                 </div>
+                {% if game.status == 'live' and game.last_play %}
+                <div class="small" style="color:#888; margin-top:2px;">{{ game.last_play }}</div>
+                {% endif %}
             </div>
             <div class="game-actions">
                 <form action="/select_ncaaf_game" method="post">

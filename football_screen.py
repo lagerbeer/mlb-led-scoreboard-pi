@@ -246,12 +246,18 @@ class FootballRenderer:
         self._draw_team_row(game['home'], LAYOUT["home"]["bg_y_start"], LAYOUT["home"]["bg_y_end"],
                              LAYOUT["home"]["text_y"], game.get('possession') == 'home')
 
-        if game['status'] == 'live' and game.get('down_distance'):
+        down_distance = game.get('down_distance', '')
+        last_play = game.get('last_play', '')
+        if game['status'] == 'live' and (down_distance or last_play):
             # down_distance is ESPN's full downDistanceText (e.g. "3rd & 7 at
             # NE 35"), not just the down/distance part - "at NE 35" is the
             # ball's field position, team-relative (whichever team's own
             # territory it's in), same as it'd be called on a broadcast.
-            # Scrolls like the status row above if a longer variant doesn't
-            # fit, rather than centering (which would need a static width).
+            # last_play (e.g. "(Shotgun) B.Rypien pass incomplete deep middle
+            # to J.Kelly.") is appended onto the same row rather than given
+            # its own - there's no spare row left on a 64px-tall panel that
+            # isn't already status/away/home, so this one row scrolls through
+            # both pieces as a single ticker instead.
+            detail_text = f"{down_distance}  -  {last_play}" if (down_distance and last_play) else (down_distance or last_play)
             detail_color = self.RED if game.get('red_zone') else self.GRAY
-            self.draw_scrolling_text("detail", self.font_small, 4, LAYOUT["detail_y"], 120, detail_color, game['down_distance'])
+            self.draw_scrolling_text("detail", self.font_small, 4, LAYOUT["detail_y"], 120, detail_color, detail_text)
