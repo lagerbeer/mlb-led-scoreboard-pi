@@ -18,15 +18,17 @@ from PIL import Image
 LOGO_DIR = '/home/pi/mlb_scoreboard/assets/nfl_logos'
 LOGO_SIZE = (16, 16)
 
-# Two big team rows (24px each) sandwiched between a status row up top
-# (quarter/clock, halftime, kickoff time, or final) and a down-and-distance
-# row at the bottom - there's no linescore grid like baseball's, since a
-# football game only has two numbers that matter: each team's current score.
+# Two big team rows (24px each) sandwiched between the down-and-distance/
+# last-play row up top and the status row (quarter/clock, halftime, kickoff
+# time, or final) at the bottom - there's no linescore grid like baseball's,
+# since a football game only has two numbers that matter: each team's
+# current score. Ball placement sits at the top, left-aligned (it's what a
+# viewer glancing at the panel wants first), status at the bottom.
 LAYOUT = {
-    "status_y": 9,
+    "detail_y": 9,
     "away": {"bg_y_start": 12, "bg_y_end": 32, "text_y": 27},
     "home": {"bg_y_start": 32, "bg_y_end": 52, "text_y": 47},
-    "detail_y": 61,
+    "status_y": 61,
     "logo_x": 2,
     "code_x": 21,
     "score_right_margin": 4
